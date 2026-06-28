@@ -2,6 +2,7 @@ package event
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,17 +22,22 @@ func ping(task string) testEvent      { return testEvent{task: TaskID(task), typ
 func pingAt(typ string) testEvent     { return testEvent{task: "t", typ: Topic(typ)} }
 func typed(task, typ string) testEvent { return testEvent{task: TaskID(task), typ: Topic(typ)} }
 
-// recv reads one envelope with a short timeout. ok=false means nothing
+// recvIn reads one envelope with a timeout of d. ok=false means nothing
 // arrived, which is how "no delivery" assertions are expressed without flaky
 // sleeps.
-func recv(t *testing.T, ch <-chan Envelope) (Envelope, bool) {
+func recvIn(t *testing.T, ch <-chan Envelope, d time.Duration) (Envelope, bool) {
 	t.Helper()
 	select {
 	case env, ok := <-ch:
 		return env, ok
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(d):
 		return Envelope{}, false
 	}
+}
+
+// recv is the common "did anything arrive?" probe with a short default timeout.
+func recv(t *testing.T, ch <-chan Envelope) (Envelope, bool) {
+	return recvIn(t, ch, 200*time.Millisecond)
 }
 
 func TestPublishDeliversToMatchingSubscriber(t *testing.T) {
@@ -203,4 +209,100 @@ func TestPublishContextCancelStopsFanOut(t *testing.T) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 	_ = ch
+}
+
+// --- L3-003: per-subscriber FIFO, bounded channels, backpressure ---
+
+func TestSubscriberChannelIsBoundedTo64(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	ch := bus.Subscribe("test.>")
+	if cap(ch) != 64 {
+		t.Errorf("subscriber channel cap = %d, want 64 (File 05 §5.6 bound)", cap(ch))
+	}
+}
+
+// TestFanoutIsSerializedPerSubscriberFIFO is the L3-003 RED driver: under
+// concurrent publishers, every subscriber must receive envelopes in strictly
+// increasing Seq order. The inline fan-out (no serialization) lets two
+// publishers' channel sends interleave, so this fails until stamp+fan-out are
+// serialized onto one writer.
+func TestFanoutIsSerializedPerSubscriberFIFO(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	ch := bus.Subscribe("test.>")
+
+	const pubs, perPub = 8, 50
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(pubs)
+	for p := 0; p < pubs; p++ {
+		go func() {
+			defer wg.Done()
+			<-start // release all publishers at once to maximise interleaving
+			for i := 0; i < perPub; i++ {
+				if err := bus.Publish(context.Background(), ping("t")); err != nil {
+					// ErrBusClosed is expected only if the test is tearing down
+					// (e.g. a prior assertion failed and Close ran mid-flight).
+					if err != ErrBusClosed {
+						t.Errorf("publish: %v", err)
+					}
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+
+	// Collect every envelope; assert strict monotonic increase of Seq.
+	var last uint64
+	for i := 0; i < pubs*perPub; i++ {
+		env, ok := recvIn(t, ch, time.Second)
+		if !ok {
+			t.Fatalf("event %d/%d: timed out waiting for delivery", i, pubs*perPub)
+		}
+		if env.Seq <= last {
+			t.Fatalf("FIFO violated at index %d: Seq %d after Seq %d (subscribers must receive in seq order)",
+				i, env.Seq, last)
+		}
+		last = env.Seq
+	}
+	wg.Wait()
+}
+
+func TestSlowSubscriberBlocksPublisherNotDrops(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	ch := bus.Subscribe("test.>")
+
+	// Fill the 64-deep buffer so the next publish must block.
+	for i := 0; i < 64; i++ {
+		if err := bus.Publish(context.Background(), ping("t")); err != nil {
+			t.Fatalf("fill publish %d: %v", i, err)
+		}
+	}
+
+	// The 65th publish should block (backpressure), not drop the event.
+	done := make(chan error, 1)
+	go func() { done <- bus.Publish(context.Background(), ping("t")) }()
+	select {
+	case err := <-done:
+		t.Fatalf("publish did not block on full subscriber (err=%v); backpressure should stall, not drop", err)
+	case <-time.After(50 * time.Millisecond):
+		// good: still blocked
+	}
+
+	// Draining one slot must let the blocked publish complete.
+	<-ch
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("blocked publish completed with error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("blocked publish did not complete after draining one slot")
+	}
 }
