@@ -31,9 +31,26 @@ func runHeadless(stdin io.Reader, seed int64) (string, error) {
 	return runHeadlessCtx(context.Background(), stdin, seed)
 }
 
-// runHeadlessCtx is the context-aware form: canceling ctx cancels the task
-// mid-run (Ctrl+C path). It returns the printed transcript and any fatal error.
-func runHeadlessCtx(ctx context.Context, stdin io.Reader, seed int64) (string, error) {
+// headlessDeps lets a caller override the runtime's port wiring (File 04 §4.6).
+// Sprint 1's runHeadless leaves these nil → the runtime fills noop stubs (the
+// single-turn demo path). L5-003 injects the real Context Engine + Prompt
+// Compiler + an asserting cognitive core so the headless transcript reflects a
+// real, compiled prompt carrying real file contents. Repo is the working-tree
+// root the Context Engine reads from; Open is the set of open files to gather.
+type headlessDeps struct {
+	context runtime.ContextBuilder
+	prompt  runtime.PromptCompiler
+	cog     runtime.CognitiveCore
+	repo    string
+	open    []string
+	window  int
+}
+
+// runHeadlessDeps is the injectable form: real L4/L5 ports when deps is
+// non-nil; the Sprint 1 stub path otherwise. The shared core drives the task
+// and prints the transcript. runHeadless/runHeadlessCtx delegate here so
+// there's one drive/print path, not two.
+func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *headlessDeps) (string, error) {
 	prompt := readPrompt(stdin)
 
 	// Fresh per-run store keeps the transcript reproducible: session and task
@@ -54,11 +71,16 @@ func runHeadlessCtx(ctx context.Context, stdin io.Reader, seed int64) (string, e
 		return "", err
 	}
 
-	core := runtime.New(runtime.Deps{
-		Bus:       bus,
-		Session:   smgr,
-		Cognitive: runtime.StubCognitive{Answer: cannedAnswer(prompt)},
-	})
+	d := runtime.Deps{Bus: bus, Session: smgr}
+	if deps != nil {
+		d.Context = deps.context
+		d.Prompt = deps.prompt
+		d.Cognitive = deps.cog
+	} else {
+		// Sprint 1 stub path: a canned-answer stub core, noop context+prompt.
+		d.Cognitive = runtime.StubCognitive{Answer: cannedAnswer(prompt)}
+	}
+	core := runtime.New(d)
 
 	// Subscribe to the root wildcard BEFORE driving so no event is missed.
 	ch := bus.Subscribe(event.Topic(">"))
@@ -90,6 +112,13 @@ func runHeadlessCtx(ctx context.Context, stdin io.Reader, seed int64) (string, e
 	_ = bus.Close()
 	wg.Wait()
 	return out.String(), nil
+}
+
+// runHeadlessCtx is the context-aware form: canceling ctx cancels the task
+// mid-run (Ctrl+C path). It delegates to runHeadlessDeps with no injected
+// ports (the Sprint 1 stub path).
+func runHeadlessCtx(ctx context.Context, stdin io.Reader, seed int64) (string, error) {
+	return runHeadlessDeps(ctx, stdin, seed, nil)
 }
 
 // readPrompt trims whitespace/newlines from the first line of stdin; that line
