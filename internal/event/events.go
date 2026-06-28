@@ -126,6 +126,21 @@ type VerificationFailedEvent struct {
 func (e *VerificationFailedEvent) Type() Topic      { return "verification.failed" }
 func (e *VerificationFailedEvent) CausalID() TaskID { return e.Task }
 
+// VerificationStageEvent is the per-stage advisory (File 09 §9.4.2): each
+// completed stage publishes its pass/warn/fail so the TUI shows a green check
+// / red cross per stage. Detail carries the one-line reason (the failed stage's
+// diagnostic summary, the warning's list). Status is "pass"/"warn"/"fail"/
+// "skip" — the same strings verify.Severity.String returns.
+type VerificationStageEvent struct {
+	Task   TaskID `json:"task"`
+	Stage  string `json:"stage"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+func (e *VerificationStageEvent) Type() Topic      { return "verification.stage" }
+func (e *VerificationStageEvent) CausalID() TaskID { return e.Task }
+
 type ReflectionEvent struct {
 	Task TaskID `json:"task"`
 	Note string `json:"note"`

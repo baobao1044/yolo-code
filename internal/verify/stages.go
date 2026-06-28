@@ -47,9 +47,10 @@ type StageRunner interface {
 	Run(ctx context.Context, files []string) StageResult
 }
 
-// Deps wires the pipeline's stages. Runner and FS are the seams; the AST stage
-// builds its own patch.Validator (one validator per pipeline — stateless).
-type Deps struct {
+// PipelineDeps wires the pipeline's stages. Runner and FS are the seams; the
+// AST stage builds its own patch.Validator (one validator per pipeline —
+// stateless). The verify Engine wraps this with an event Bus (see engine.go).
+type PipelineDeps struct {
 	Runner Runner
 	FS     FS
 }
@@ -62,7 +63,7 @@ type Pipeline struct {
 // NewPipeline builds the 7-stage chain. Stages are registered in pipeline order
 // (AST first, Policy last) so Run walks them in the right sequence without a
 // separate ordering table.
-func NewPipeline(d Deps) *Pipeline {
+func NewPipeline(d PipelineDeps) *Pipeline {
 	return &Pipeline{stages: []StageRunner{
 		&astStage{fs: d.FS, validator: patch.NewValidator()},
 		&formatStage{runner: d.Runner},
@@ -136,10 +137,15 @@ func (s *formatStage) Run(ctx context.Context, files []string) StageResult {
 		return StageResult{Stage: StageFormat, Status: SevFail, Detail: "gofmt: " + err.Error()}
 	}
 	if mismatches := nonEmptyLines(stdout); len(mismatches) > 0 {
+		var issues []Issue
+		for _, f := range mismatches {
+			issues = append(issues, Issue{Path: f, Code: "format", Message: "unformatted (gofmt -l)"})
+		}
 		return StageResult{
 			Stage:  StageFormat,
 			Status: SevWarn,
 			Detail: "unformatted: " + strings.Join(mismatches, ", "),
+			Issues: issues,
 		}
 	}
 	return StageResult{Stage: StageFormat, Status: SevPass, Detail: "formatted"}

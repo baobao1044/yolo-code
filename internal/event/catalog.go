@@ -23,6 +23,7 @@ func init() {
 	Register("approval.request", func() Event { return &ApprovalRequestEvent{} })
 	Register("observation.received", func() Event { return &ObservationEvent{} })
 	Register("verification.failed", func() Event { return &VerificationFailedEvent{} })
+	Register("verification.stage", func() Event { return &VerificationStageEvent{} })
 	Register("reflection.note", func() Event { return &ReflectionEvent{} })
 	Register("patch.applied", func() Event { return &PatchAppliedEvent{} })
 

@@ -68,7 +68,7 @@ func containsCall(calls []fakeCall, name, sub string) bool {
 
 func TestPipelineRunsAllStagesInOrder(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -95,7 +95,7 @@ func TestPipelineShortCircuitsOnFail(t *testing.T) {
 		return "", "", 0, nil
 	}}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: r, FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -116,7 +116,7 @@ func TestPipelineShortCircuitsOnFail(t *testing.T) {
 
 func TestASTStageFailsOnBrokenSyntax(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {\n"} // missing close brace
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -136,7 +136,7 @@ func TestASTStageAcceptsUnknownExtension(t *testing.T) {
 	// A Markdown file: the patch Validator skips unknown extensions (§10.4),
 	// so AST passes — verify forwards that guarantee.
 	fs := fakeFS{"README.md": "# broken markdown (((\n"}
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"README.md"})
 
@@ -155,7 +155,7 @@ func TestFormatStageWarnsOnMismatch(t *testing.T) {
 		return "", "", 0, nil
 	}}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: r, FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -176,7 +176,7 @@ func TestLintStageFailsOnVetError(t *testing.T) {
 		return "", "", 0, nil
 	}}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: r, FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -198,7 +198,7 @@ func TestBuildStageFailsOnCompileError(t *testing.T) {
 		return "", "", 0, nil
 	}}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: r, FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -223,7 +223,7 @@ func TestTestStageFailsOnTestFailure(t *testing.T) {
 		return "", "", 0, nil
 	}}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: r, FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -239,7 +239,7 @@ func TestTestStageFailsOnTestFailure(t *testing.T) {
 
 func TestPolicyStageBlocksVendorEdits(t *testing.T) {
 	fs := fakeFS{"vendor/pkg/x.go": "package pkg\n\nfunc X() {}\n"}
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"vendor/pkg/x.go"})
 
@@ -264,7 +264,7 @@ func TestPolicyStageBlocksVendorEdits(t *testing.T) {
 
 func TestPolicyStageWarnsOnTodoWithoutOwner(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n// TODO fix this\n"}
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
@@ -288,7 +288,7 @@ func TestPolicyStageWarnsOnTodoWithoutOwner(t *testing.T) {
 
 func TestPolicyStagePassesCleanFiles(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(Deps{Runner: passRunner(), FS: fs})
+	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
 	res := p.Run(context.Background(), []string{"a.go"})
 
