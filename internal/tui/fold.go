@@ -31,6 +31,45 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.taskID = e.Task
 		m.goal = e.Goal
 		m.state = "" // reset for a new task; state.change repopulates (TUI-003)
+
+	// --- Chat pane (TUI-002, File 14 §14.5) ---
+	case *event.ThinkingEvent:
+		// llm.thinking deltas accumulate into the live thinking bubble; the
+		// spinner turns on (TUI-007 coalesces the repaint; accumulation is the
+		// correctness invariant). The bubble flushes on assistant.message.
+		m.thinking += e.Delta
+		m.streaming = true
+	case *event.TokenEvent:
+		// llm.token deltas accumulate into the live assistant bubble (separate
+		// from thinking). Flushed to messages on assistant.message.
+		m.liveAssistant += e.Delta
+		m.streaming = true
+	case *event.AssistantMessageEvent:
+		// Finalize the assistant bubble (File 14 §14.5): append the final Text
+		// as a message, clear the live + thinking bubbles, end streaming. The
+		// streamed accumulation could fold in here (TUI-002 appends the event's
+		// Text — the authoritative final answer); a hardening pass merges the
+		// liveAssistant tail. Clearing thinking is the mutation guard.
+		m.messages = append(m.messages, messageView{role: "assistant", text: e.Text})
+		m.thinking = ""
+		m.liveAssistant = ""
+		m.streaming = false
+	case *event.ToolCallEvent:
+		// "calling <tool>" line; the spinner reads activeTool (TUI-007).
+		m.activeTool = e.Tool
+		m.messages = append(m.messages, messageView{role: "tool", text: "calling " + e.Tool})
+	case *event.ToolResultEvent:
+		// Tool finished: clear the active tool + append a summarized line.
+		// ToolResultEvent has no outcome field (spec gap — no ✓/✗ badge); the
+		// line names the tool. The full obs is display-truncated elsewhere.
+		m.activeTool = ""
+		m.messages = append(m.messages, messageView{role: "tool", text: e.Tool})
+	case *event.ObservationEvent:
+		// Truncated observation preview (display-only; full obs in the log).
+		m.messages = append(m.messages, messageView{role: "observation", text: e.Tool})
+	case *event.ReflectionEvent:
+		// Dimmed inline note (File 14 §14.5).
+		m.messages = append(m.messages, messageView{role: "reflection", text: e.Note})
 	}
 	return m, relaunchWatcher(m)
 }
