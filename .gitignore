@@ -1,0 +1,13 @@
+# Build outputs
+/yolo
+/yolo.exe
+/bin/
+
+# Test artifacts
+*.test
+*.out
+*.prof
+
+# OS cruft
+.DS_Store
+Thumbs.db
