@@ -98,6 +98,23 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 	case *event.TaskPausedEvent:
 		// The TUI labels PAUSED (it doesn't drive the FSM; the runtime does).
 		m.state = "PAUSED"
+
+	// --- Diff viewer (TUI-004, File 14 §14.7.3) ---
+	case *event.PatchAppliedEvent:
+		// Open the diff viewer focused, with the file list + counts. The viewer
+		// replaces any previous diff (§14.6.1: the latest change is what the
+		// user reviews, not a stack). PatchAppliedEvent has NO diff-hunks text
+		// (spec gap: only Snapshot + Files + Insertions/Deletions) — the viewer
+		// renders the file list + counts (hunk-colored in View), not hunks.
+		// Edits come only from patch.applied events (§14.1.1); the viewer never
+		// edits.
+		m.diff = &diffView{files: e.Files, insertions: e.Insertions, deletions: e.Deletions}
+		m.focus = paneDiff
+	case *event.VerificationFailedEvent:
+		// Open the diff viewer focused on the failing file, reason staged so the
+		// user sees why verification broke.
+		m.diff = &diffView{reason: e.Reason}
+		m.focus = paneDiff
 	}
 	return m, relaunchWatcher(m)
 }
