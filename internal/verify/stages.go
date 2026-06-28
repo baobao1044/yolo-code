@@ -132,6 +132,9 @@ type formatStage struct{ runner Runner }
 func (s *formatStage) Name() Stage { return StageFormat }
 
 func (s *formatStage) Run(ctx context.Context, files []string) StageResult {
+	if !hasToolFor(files, StageFormat) {
+		return skipNoTool(StageFormat)
+	}
 	stdout, _, _, err := s.runner.Run(ctx, "gofmt", append([]string{"-l"}, files...)...)
 	if err != nil {
 		return StageResult{Stage: StageFormat, Status: SevFail, Detail: "gofmt: " + err.Error()}
@@ -162,6 +165,9 @@ type lintStage struct{ runner Runner }
 func (s *lintStage) Name() Stage { return StageLint }
 
 func (s *lintStage) Run(ctx context.Context, files []string) StageResult {
+	if !hasToolFor(files, StageLint) {
+		return skipNoTool(StageLint)
+	}
 	_, stderr, exit, err := s.runner.Run(ctx, "go", append([]string{"vet"}, files...)...)
 	if err != nil {
 		return StageResult{Stage: StageLint, Status: SevFail, Detail: "go vet: " + err.Error()}
@@ -206,6 +212,9 @@ func (s *buildStage) Run(ctx context.Context, files []string) StageResult {
 // of the changed files' package directories (§9.5.1 scoping — `go build .`,
 // not `./...`). A non-zero exit is a fail with the compile errors parsed.
 func buildCmd(r Runner, stage Stage, code string, files []string) StageResult {
+	if !hasToolFor(files, stage) {
+		return skipNoTool(stage)
+	}
 	dirs := dirOf(files)
 	_, stderr, exit, err := r.Run(context.Background(), "go", append([]string{"build"}, dirs...)...)
 	if err != nil {
@@ -235,6 +244,9 @@ type testStage struct{ runner Runner }
 func (s *testStage) Name() Stage { return StageTest }
 
 func (s *testStage) Run(ctx context.Context, files []string) StageResult {
+	if !hasToolFor(files, StageTest) {
+		return skipNoTool(StageTest)
+	}
 	dirs := dirOf(files)
 	_, stderr, exit, err := s.runner.Run(ctx, "go", append([]string{"test"}, dirs...)...)
 	if err != nil {
@@ -356,6 +368,66 @@ func dirOf(files []string) []string {
 	}
 	sort.Strings(dirs)
 	return dirs
+}
+
+// --- per-language stage matrix (§9.5.3 + §9.5.4) ----------------------------
+
+// languageOf returns the language tag for a path's extension, for the per-
+// language stage matrix (§9.5.4). "go" for .go; "" (Other) for anything else
+// (.md, .txt, …) — the matrix skips all command stages for Other. Adding a
+// language means teaching languageOf its extension and listing it in toolLangs,
+// not touching the engine (same extensibility rule as the tool registry,
+// §9.6.1). L8-004 wires Go only.
+func languageOf(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "go"
+	default:
+		return "" // Other — no command-stage tool (§9.5.4 matrix row).
+	}
+}
+
+// toolLangs is the per-stage set of languages that have a tool (§9.5.4). Go has
+// all five command stages; Other has none. AST/Policy aren't in the matrix —
+// AST has its own validator (which skips unknown exts), Policy is the project
+// gate that always runs.
+var toolLangs = map[Stage]map[string]bool{
+	StageFormat:    {"go": true},
+	StageLint:      {"go": true},
+	StageTypeCheck: {"go": true},
+	StageBuild:     {"go": true},
+	StageTest:      {"go": true},
+}
+
+// hasToolFor reports whether any changed file is in a language the stage has a
+// tool for (§9.5.4). A Markdown-only patch → all command stages skip; a mixed
+// Go + Markdown patch keeps them running (the .md file doesn't gate them off —
+// Go has a tool, so the stage runs and the .md file is simply ignored by the
+// Go tools). Stages absent from toolLangs (AST, Policy) always run their own
+// logic — hasToolFor returns true so they're never skipped by the matrix.
+func hasToolFor(files []string, stage Stage) bool {
+	langs, ok := toolLangs[stage]
+	if !ok {
+		return true // AST/Policy own their skip logic; the matrix doesn't gate them.
+	}
+	for _, f := range files {
+		if langs[languageOf(f)] {
+			return true
+		}
+	}
+	return false
+}
+
+// skipNoTool is the StageResult a command stage returns when hasToolFor is
+// false: a SevSkip naming the reason, so the trace shows *why* the stage didn't
+// run (§9.5.3: "skips are recorded in the verdict so the trace shows why a
+// stage didn't run, not just that it didn't").
+func skipNoTool(stage Stage) StageResult {
+	return StageResult{
+		Stage:  stage,
+		Status: SevSkip,
+		Detail: "no tool for the changed languages",
+	}
 }
 
 // nonEmptyLines splits s on newlines and drops empty lines (framing), returning
