@@ -1,0 +1,72 @@
+# yolo-code CI (File 15 §15.15.1).
+#
+# Stages: lint → vet/fmt → build matrix → unit → race → golden → (integration
+# and snapshot arrive with later sprints). The race and golden gates are the
+# non-negotiable determinism/safety invariants; on Linux they run with CGO
+# enabled (gcc is available in the GitHub-hosted runner).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Build all platforms
+        run: go build ./...
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt check
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt drift in: $out"
+            exit 1
+          fi
+        shell: bash
+      - name: Unit tests
+        run: go test ./...
+
+  race-and-golden:
+    # Race detector requires CGO/gcc; Linux runners ship gcc. This is the
+    # gate deferred from local runs (per project decision) — run here on Linux.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Race tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+      - name: Golden-transcript determinism (S5)
+        run: go test -tags=golden ./...

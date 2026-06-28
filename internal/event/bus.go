@@ -60,13 +60,13 @@ const subscriberBuf = 64
 
 // Bus is the system backbone. One instance per session.
 type Bus struct {
-	next     atomic.Uint64   // monotonic Seq source
-	subsMu   sync.Mutex      // guards the subs slice (Subscribe / Close)
+	next     atomic.Uint64 // monotonic Seq source
+	subsMu   sync.Mutex    // guards the subs slice (Subscribe / Close)
 	subs     []subscription
 	fanoutMu sync.Mutex // serializes stamp + durability + fan-out → FIFO
 	closed   atomic.Bool
-	closeCh  chan struct{}    // closed by Close to unblock stalled fan-outs
-	log      appender         // nil for New(); set by Open() for durability
+	closeCh  chan struct{} // closed by Close to unblock stalled fan-outs
+	log      appender      // nil for New(); set by Open() for durability
 }
 
 type subscription struct {
@@ -188,11 +188,12 @@ func (b *Bus) Close() error {
 }
 
 // matches reports whether topic t is covered by any of the subscription
-// patterns. An exact pattern matches itself; a "prefix.>" pattern matches any
+// patterns. A bare ">" is the root wildcard and matches every topic (File 05
+// §5.2); an exact pattern matches itself; a "prefix.>" pattern matches any
 // topic beginning with "prefix.".
 func matches(patterns []Topic, t Topic) bool {
 	for _, w := range patterns {
-		if w == t {
+		if w == ">" || w == t {
 			return true
 		}
 		if strings.HasSuffix(string(w), ".>") {

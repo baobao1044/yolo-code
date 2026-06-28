@@ -41,8 +41,8 @@ func (e *testEvent) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func ping(task string) testEvent      { return testEvent{task: TaskID(task), typ: "test.ping"} }
-func pingAt(typ string) testEvent     { return testEvent{task: "t", typ: Topic(typ)} }
+func ping(task string) testEvent       { return testEvent{task: TaskID(task), typ: "test.ping"} }
+func pingAt(typ string) testEvent      { return testEvent{task: "t", typ: Topic(typ)} }
 func typed(task, typ string) testEvent { return testEvent{task: TaskID(task), typ: Topic(typ)} }
 
 // recvIn reads one envelope with a timeout of d. ok=false means nothing
@@ -209,6 +209,32 @@ func TestCloseClosesSubscriberChannels(t *testing.T) {
 
 	if _, ok := <-ch; ok {
 		t.Fatal("subscriber channel not closed after Close")
+	}
+}
+
+// TestRootWildcardMatchesEverything covers the root subscriber ">" (File 05
+// §5.2: the event log and Infrastructure subscribe to the root and are the
+// only subscribers guaranteed to see every event). A bare ">" must match any
+// topic, including dotted leaves and single-segment topics.
+func TestRootWildcardMatchesEverything(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	ch := bus.Subscribe(">")
+	topics := []Topic{"task.started", "state.change", "tool.call", "error", "user.quit", "solo"}
+	for _, typ := range topics {
+		if err := bus.Publish(context.Background(), pingAt(string(typ))); err != nil {
+			t.Fatalf("publish %q: %v", typ, err)
+		}
+	}
+	for i, want := range topics {
+		env, ok := recvIn(t, ch, time.Second)
+		if !ok {
+			t.Fatalf("event %d (%q) not delivered to root subscriber", i, want)
+		}
+		if env.Evt.Type() != want {
+			t.Errorf("event %d: Type = %q, want %q", i, env.Evt.Type(), want)
+		}
 	}
 }
 

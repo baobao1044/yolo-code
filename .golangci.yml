@@ -1,0 +1,32 @@
+# golangci-lint configuration for yolo-code (File 15 §15.15.1).
+# Sprint 0 starts minimal; later sprints add the custom `layered` linter
+# (§15.15.2) and stricter presets as the architecture grows.
+
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # go vet passes
+    - ineffassign    # ineffectual assignments
+    - staticcheck    # correctness
+    - unused         # unused identifiers
+    - misspell       # spelling
+    - revive         # style
+
+linters-settings:
+  errcheck:
+    # Tests may ignore errors intentionally (e.g. _ = ch), but production code
+    # must check. Keep the default strictness for non-test files.
+    exclude-functions: []
+
+issues:
+  exclude-rules:
+    # Test helpers frequently close buses in defer and tolerate their error.
+    - path: _test\.go
+      linters:
+        - errcheck
+  max-issues-per-linter: 0
+  max-same-issues: 0

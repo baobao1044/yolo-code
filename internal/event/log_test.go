@@ -19,7 +19,7 @@ func init() {
 // have been appended and in what order, without touching disk. It lets the
 // durability-before-visibility test observe ordering precisely.
 type fakeAppender struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	appended map[uint64]bool
 }
 
