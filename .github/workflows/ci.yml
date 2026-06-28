@@ -95,3 +95,15 @@ jobs:
       - name: Snapshot budgets
         run: make test-snapshot
         shell: bash
+
+  docs:
+    # User documentation coverage gate (H-007).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Doc coverage
+        run: make test-docs
+        shell: bash

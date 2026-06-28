@@ -42,6 +42,10 @@ test-golden:
 test-snapshot:
 	$(GO) test -tags=snapshot ./internal/tui
 
+# Documentation coverage gate (H-007). Isolated by build tag.
+test-docs:
+	$(GO) test -tags=docs ./cmd/yolo
+
 lint:
 	golangci-lint run --timeout=5m
 
