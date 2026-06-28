@@ -1,0 +1,9 @@
+# Normalize line endings to LF in the repo regardless of platform checkout.
+# The project cross-compiles for Win/macOS/Linux (File 15 §15.14); keeping LF
+# avoids CRLF leaking into golden-transcript fixtures and diffs.
+* text=auto eol=lf
+
+# Binary assets are never normalized.
+*.png binary
+*.jpg binary
+*.gif binary
