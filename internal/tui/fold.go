@@ -115,6 +115,22 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		// user sees why verification broke.
 		m.diff = &diffView{reason: e.Reason}
 		m.focus = paneDiff
+
+	// --- Cost meter (TUI-005, File 14 §14.7.5) ---
+	case *event.CostDegradedEvent:
+		// Set the degradation level the rail displays. Spec gap: File 14 §14.5
+		// reads cost.degraded.level, but CostDegradedEvent's field is `Stage`
+		// (it carries the level). The rail shows "level: <Stage>". The mutation
+		// guard: without this, the rail never reflects the degradation.
+		m.cost.level = e.Stage
+	case *event.CostAbortEvent:
+		// Abort: set the flag + reason + surface a banner (§14.5). Per Decision
+		// 2, dollars/loops stay blank — the catalog has no CostSpendEvent/
+		// CostLoopEvent (spec gap; deferred to the integration sprint). The TUI
+		// never imports infra for a snapshot (import matrix).
+		m.cost.aborted = true
+		m.cost.abortReason = e.Reason
+		m.banner = e.Reason
 	}
 	return m, relaunchWatcher(m)
 }
