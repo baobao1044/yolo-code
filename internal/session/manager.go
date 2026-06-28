@@ -164,3 +164,14 @@ func (m *Manager) task(tid TaskID) (*Task, error) {
 	}
 	return t, nil
 }
+
+// LoadTaskPublic returns the live task handle for a known task, or nil if
+// unknown. The runtime (File 04) uses it to attach the task to its drive
+// handle. It is the public face of the internal task lookup.
+func (m *Manager) LoadTaskPublic(tid TaskID) *Task {
+	t, err := m.task(tid)
+	if err != nil {
+		return nil
+	}
+	return t
+}
