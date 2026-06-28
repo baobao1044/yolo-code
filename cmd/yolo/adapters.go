@@ -100,6 +100,14 @@ func (a *assertCognitive) Think(_ context.Context, p runtime.Prompt) (runtime.Co
 
 func (a *assertCognitive) HasMore(*session.Task) bool { return false }
 
+// Reflect on the assertion core aborts (it never reaches the verify path; a
+// failure here would be a wiring bug). The real cognitive core (Sprint 6
+// wiring) overrides this with the LLM reflection; assertCognitive is the Sprint
+// 2/3 test core that only checks the prompt carried real content.
+func (a *assertCognitive) Reflect(context.Context, *session.Task, runtime.Verdict, runtime.Observation) runtime.ReflectionDecision {
+	return runtime.ReflectionDecision{Abort: true, Note: "assert cognitive has no reflection"}
+}
+
 // containsStr is a local strings.Contains stand-in (kept local so this non-test
 // file doesn't add a strings import just for one call site).
 func containsStr(s, sub string) bool {

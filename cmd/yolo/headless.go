@@ -80,6 +80,17 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 		// Sprint 1 stub path: a canned-answer stub core, noop context+prompt.
 		d.Cognitive = runtime.StubCognitive{Answer: cannedAnswer(prompt)}
 	}
+	// Sprint 6 wiring gap: the exec/verify/patch/restorer ports are NOT yet
+	// wired here (they default to runtime no-op stubs). The real exec.Engine
+	// (L7), verify.Engine (L8), patch.Engine (L9) and the session Manager's
+	// checkpoint Restore all sit behind the runtime's port seams, but the
+	// adapters that bridge them live in the composition root — and those are
+	// deferred to the integration sprint (after L10 Memory). The L8-003 FSM
+	// wiring PATCH→VERIFY→(fail)→rollback is proven by internal/runtime's
+	// loop_test.go against stub ports, which is the Sprint 6 exit bar
+	// (§15.9.2: a breaking agent edit is detected, the FSM transitions and
+	// rolls back, the task is not marked done). Wiring the real engines here
+	// needs its own TDD cycle (adapter tests) and is out of scope for L8-003.
 	core := runtime.New(d)
 
 	// Subscribe to the root wildcard BEFORE driving so no event is missed.

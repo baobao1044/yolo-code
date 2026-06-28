@@ -35,6 +35,12 @@ func (b *blockingCognitive) Think(ctx context.Context, _ Prompt) (CognitiveTurn,
 
 func (*blockingCognitive) HasMore(*session.Task) bool { return false }
 
+// blockingCognitive never reaches the tool/verify path, so Reflect aborts (a
+// verify failure here would be a wiring bug). Mirrors StubCognitive.Reflect.
+func (*blockingCognitive) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true, Note: "blocking cognitive has no reflection"}
+}
+
 // TestCancelMidThinkReturnsCancelled is the L2-004 headline: a task canceled
 // while the cognitive core is mid-Thinking unwinds to a terminal CANCELLED
 // state via the Session Manager, and the drive loop returns (does not spin or

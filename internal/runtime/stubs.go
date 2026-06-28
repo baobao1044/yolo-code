@@ -38,3 +38,42 @@ func (s StubCognitive) Think(context.Context, Prompt) (CognitiveTurn, error) {
 }
 
 func (StubCognitive) HasMore(*session.Task) bool { return false }
+
+// Reflect on a StubCognitive aborts (the stub never takes the tool path, so a
+// verify failure here would be a wiring bug — abort surfaces it loudly rather
+// than spinning). Real cores (cmd/yolo) override this with the LLM reflection.
+func (StubCognitive) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true, Note: "stub cognitive has no reflection"}
+}
+
+// noopVerifier passes everything (the stubbed loop never reaches VERIFY). Wired
+// as the default in New so a nil Deps.Verify doesn't nil-panic once the drive
+// loop drives the VERIFY state.
+type noopVerifier struct{}
+
+func (noopVerifier) Verify(context.Context, Observation, *session.Task, VerifyPolicy) (Verdict, error) {
+	return Verdict{Pass: true, Severity: "pass", Reason: "noop"}, nil
+}
+
+// noopExecutor never needs approval and returns an empty observation. Default
+// in New so a nil Deps.Exec doesn't nil-panic.
+type noopExecutor struct{}
+
+func (noopExecutor) NeedsApproval(ToolCall) bool { return false }
+func (noopExecutor) Dispatch(context.Context, ToolCall) (Observation, error) {
+	return Observation{}, nil
+}
+
+// noopPatcher accepts nothing (the stubbed loop never reaches PATCH). Default in
+// New so a nil Deps.Patch doesn't nil-panic.
+type noopPatcher struct{}
+
+func (noopPatcher) Apply(context.Context, PatchOp) (PatchResult, error) {
+	return PatchResult{Reason: "noop patcher"}, nil
+}
+
+// noopRestorer is a no-op rollback seam. Default in New so a nil Deps.Restore
+// doesn't nil-panic; the real adapter wires session.Manager.Restore.
+type noopRestorer struct{}
+
+func (noopRestorer) Restore(context.Context, session.TaskID, string) error { return nil }
