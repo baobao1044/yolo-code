@@ -200,6 +200,7 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 				continue
 			}
 			call := h.pending[0]
+			call.Task = event.TaskID(h.id)
 			if c.exec.NeedsApproval(call) {
 				from, to, err := h.fsm.transition(SigNeedsApproval, "approval")
 				if err != nil {

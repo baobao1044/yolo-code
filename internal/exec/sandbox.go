@@ -35,6 +35,13 @@ type Sandbox struct {
 	hosts map[string]bool
 }
 
+// NewSandbox builds a Sandbox rooted at root with cwd as the working directory.
+// The composition root uses this so cmd/yolo can wire a real sandbox without
+// reaching into unexported fields (Sprint 12 integration).
+func NewSandbox(root, cwd string) *Sandbox {
+	return &Sandbox{root: root, cwd: cwd}
+}
+
 // Resolve confines p to the repo root (File 08 §8.4.2). A relative path is
 // joined to cwd; an absolute one is taken as-is. Symlinks are flattened with
 // EvalSymlinks before the confinement check so a symlink pointing outside is

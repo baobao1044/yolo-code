@@ -32,6 +32,7 @@ type ToolCall struct {
 	Tool   string
 	Args   []byte // json.RawMessage
 	Reason string
+	Task   event.TaskID // causal task id, threaded by the runtime before dispatch
 }
 
 // Observation is a tool's result (File 08). Opaque payload; Files lists the
