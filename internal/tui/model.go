@@ -116,6 +116,12 @@ type Model struct {
 	// spinner (TUI-007)
 	spinnerFrame int
 
+	// input (TUI-006): the current text in the input line. The production
+	// handleInput reads this from a bubbles/textinput widget; the pure
+	// transition stores it on the model so the test drives it without a widget.
+	// Reset to "" on submit (optimistic echo → user.submit).
+	inputText string
+
 	// bus bridge
 	sub       <-chan event.Envelope
 	cancel    chan struct{}
