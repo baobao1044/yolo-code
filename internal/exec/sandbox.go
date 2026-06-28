@@ -20,6 +20,11 @@ import (
 // model as a tool result, not a crash.
 var ErrPathEscapes = errors.New("exec: path escapes sandbox root")
 
+// ErrNetworkDenied is returned when a tool whose metadata declares Net:true
+// targets a host not on the sandbox's allowlist (File 08 §8.4.4). Default-
+// deny: with no allowlist, every network attempt is blocked before Run.
+var ErrNetworkDenied = errors.New("exec: network access denied (host not allowlisted)")
+
 // Sandbox confines filesystem access to root, with cwd as the relative base
 // for non-absolute paths (File 08 §8.4.2). Resolve is the single gate every
 // Read/Write/Grep/Glob passes through.

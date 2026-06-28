@@ -39,13 +39,16 @@ type Normalizer interface {
 }
 
 // Deps wires the engine at construction. Registry and bus are required;
-// admitter/normalizer default to no gate / passthrough. The engine's config
-// (per-call timeout, HITL auto-approve) is set on Engine directly by tests.
+// admitter/normalizer default to no gate / passthrough. The sandbox (when
+// set) supplies path confinement for FS tools and the network allowlist for
+// Net:true tools (L7-005). The engine's config (per-call timeout, HITL
+// auto-approve) is set on Engine directly by tests.
 type Deps struct {
 	Registry   *Registry
 	Bus        *event.Bus
 	Admitter   ToolAdmitter
 	Normalizer Normalizer
+	Sandbox    *Sandbox
 }
 
 // Engine dispatches tool calls (File 08 §8.7). Fields are read-only after New
@@ -56,6 +59,7 @@ type Engine struct {
 	bus        *event.Bus
 	admitter   ToolAdmitter
 	normalizer Normalizer
+	sandbox    *Sandbox
 	config     Config
 }
 
@@ -77,6 +81,7 @@ func New(d Deps) *Engine {
 		bus:        d.Bus,
 		admitter:   d.Admitter,
 		normalizer: d.Normalizer,
+		sandbox:    d.Sandbox,
 	}
 	if e.normalizer == nil {
 		e.normalizer = passthroughNormalizer{}
@@ -101,6 +106,12 @@ func (e *Engine) Dispatch(ctx context.Context, call ToolCall) (Observation, erro
 		if err := e.admitter.Admit(call); err != nil {
 			return obsErr(call), err
 		}
+	}
+	// L7-005 network gate: a Net:true tool may only run against an allowlisted
+	// host (File 08 §8.4.4 default-deny). Inserted before the HITL gate so a
+	// network denial never prompts the user.
+	if err := e.allowNetwork(tool, call); err != nil {
+		return obsErr(call), err
 	}
 	// L7-006 inserts the HITL approval gate here (risk >= medium && !autoApprove).
 
