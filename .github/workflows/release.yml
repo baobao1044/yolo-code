@@ -1,0 +1,32 @@
+# Release pipeline dry-run (Sprint 11 H-008).
+#
+# This workflow exercises the full goreleaser pipeline in snapshot mode on every
+# push to master. It deliberately does NOT create a Git tag, GitHub release, or
+# publish artifacts. Artifacts land in dist/ and are discarded.
+name: Release Dry-Run
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --snapshot --clean

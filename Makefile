@@ -1,7 +1,7 @@
 # yolo-code developer Makefile. Mirrors the CI stages (File 15 §15.15.1) so the
 # same gates run locally and in CI. Windows note: `race` needs CGO/gcc, which
 # is not installed by default on the dev machine; run it on the Linux runner.
-.PHONY: all build vet fmt test test-race test-golden lint ci clean
+.PHONY: all build vet fmt test test-race test-golden test-snapshot test-docs lint ci clean cross snapshot
 
 GO ?= go
 
@@ -45,6 +45,10 @@ test-snapshot:
 # Documentation coverage gate (H-007). Isolated by build tag.
 test-docs:
 	$(GO) test -tags=docs ./cmd/yolo
+
+# Release dry-run via goreleaser (H-008). Snapshot mode does not publish.
+snapshot:
+	goreleaser release --snapshot --clean
 
 lint:
 	golangci-lint run --timeout=5m

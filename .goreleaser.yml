@@ -1,0 +1,34 @@
+# GoReleaser configuration (Sprint 11 H-008).
+# This pipeline is exercised only in snapshot/dry-run mode; it does not publish
+# releases or artifacts to GitHub.
+version: 2
+project_name: yolo-code
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    main: ./cmd/yolo
+    binary: yolo
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"

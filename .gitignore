@@ -2,6 +2,7 @@
 /yolo
 /yolo.exe
 /bin/
+/dist/
 
 # Test artifacts
 *.test

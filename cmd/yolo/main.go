@@ -27,6 +27,10 @@ func run(args []string) error {
 		if a == "--headless" {
 			headless = true
 		}
+		if a == "--version" {
+			fmt.Println(version)
+			return nil
+		}
 	}
 	if !headless {
 		// TUI is built (Sprint 9) but interactive wiring lands in the integration
