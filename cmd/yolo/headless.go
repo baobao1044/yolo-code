@@ -18,9 +18,13 @@ import (
 	"strings"
 	"sync"
 
+	cog "github.com/yolo-code/yolo/internal/cognitive"
+	econtext "github.com/yolo-code/yolo/internal/context"
 	"github.com/yolo-code/yolo/internal/event"
+	execpkg "github.com/yolo-code/yolo/internal/exec"
 	"github.com/yolo-code/yolo/internal/infra"
 	"github.com/yolo-code/yolo/internal/memory"
+	"github.com/yolo-code/yolo/internal/prompt"
 	"github.com/yolo-code/yolo/internal/runtime"
 	"github.com/yolo-code/yolo/internal/session"
 )
@@ -122,20 +126,22 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 			d.Memory = memoryStoreAdapter{store: deps.memory, bus: bus}
 		}
 	} else {
-		// Sprint 1 stub path: a canned-answer stub core, noop context+prompt.
-		d.Cognitive = runtime.StubCognitive{Answer: cannedAnswer(prompt)}
+		// Sprint 12 INT-008: the default --headless path uses the real
+		// context/prompt/cognitive/exec/verify/patch/restorer adapters wired to
+		// the current working directory. Tests and the TUI deferred-wiring
+		// path still inject headlessDeps explicitly.
+		defaultDeps, err := defaultHeadlessDeps(bus)
+		if err != nil {
+			return "", err
+		}
+		d.Context = defaultDeps.context
+		d.Prompt = defaultDeps.prompt
+		d.Cognitive = defaultDeps.cog
+		d.Exec = defaultDeps.exec
+		d.Verify = defaultDeps.verify
+		d.Patch = defaultDeps.patcher
+		d.Restore = defaultDeps.restorer
 	}
-	// Sprint 6 wiring gap: the exec/verify/patch/restorer ports are NOT yet
-	// wired here (they default to runtime no-op stubs). The real exec.Engine
-	// (L7), verify.Engine (L8), patch.Engine (L9) and the session Manager's
-	// checkpoint Restore all sit behind the runtime's port seams, but the
-	// adapters that bridge them live in the composition root — and those are
-	// deferred to the integration sprint (after L10 Memory). The L8-003 FSM
-	// wiring PATCH→VERIFY→(fail)→rollback is proven by internal/runtime's
-	// loop_test.go against stub ports, which is the Sprint 6 exit bar
-	// (§15.9.2: a breaking agent edit is detected, the FSM transitions and
-	// rolls back, the task is not marked done). Wiring the real engines here
-	// needs its own TDD cycle (adapter tests) and is out of scope for L8-003.
 	core := runtime.New(d)
 
 	// Subscribe to the root wildcard BEFORE driving so no event is missed.
@@ -221,4 +227,43 @@ func projectEnvelope(env event.Envelope) projection {
 		Task: string(env.Evt.CausalID()),
 		Evt:  payload,
 	}
+}
+
+// defaultHeadlessDeps wires the real adapters for a production `--headless`
+// run (Sprint 12 INT-008). It uses the current working directory as the repo
+// root and a deterministic stub provider so the output stays reproducible
+// without an external LLM.
+func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
+	repo, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+
+	sandbox := execpkg.NewSandbox(repo, repo)
+	reg := new(execpkg.Registry)
+	reg.Register(execpkg.NewBash(sandbox))
+	reg.Register(execpkg.NewRead(sandbox))
+	execEng := execpkg.New(execpkg.Deps{Registry: reg, Sandbox: sandbox, Bus: bus})
+
+	snap, err := newShadowSnap(repo)
+	if err != nil {
+		return nil, err
+	}
+	cp := newShadowCheckpointer(snap)
+	patchEng := newPatchEngine(sandbox, cp, bus)
+	execAd := &execAdapter{engine: execEng, patcher: patchEng}
+	verifyAd := &verifyAdapter{engine: newVerifyEngine(sandbox)}
+	restorer := newShadowRestorer(snap)
+
+	return &headlessDeps{
+		context:  contextAdapter{eng: econtext.New(econtext.Deps{Bus: bus, Repo: repo})},
+		prompt:   promptAdapter{comp: prompt.New(nil, bus)},
+		cog:      newRealCognitiveCore(cog.NewStubProvider(128_000), bus),
+		exec:     execAd,
+		verify:   verifyAd,
+		patcher:  &patchAdapter{engine: patchEng},
+		restorer: restorer,
+		repo:     repo,
+		bus:      bus,
+	}, nil
 }

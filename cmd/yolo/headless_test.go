@@ -24,13 +24,15 @@ func TestHeadlessSingleTurnPrintsDeterministicTranscript(t *testing.T) {
 		t.Errorf("transcript not byte-identical across runs (S5)\n first:\n%s\n second:\n%s", first, second)
 	}
 
-	// The transcript must show the canonical spine: task.started, 4 state.change
-	// (INIT→LOAD_SESSION→LOAD_CONTEXT→PLAN→DONE), assistant.message, task.completed.
+	// With the Sprint 12 wired adapters, the spine includes the real context
+	// build + token stream before the direct answer.
 	want := []string{
 		"task.started",
 		"state.change",
 		"state.change",
+		"context.built",
 		"state.change",
+		"llm.token",
 		"state.change",
 		"assistant.message",
 		"task.completed",
