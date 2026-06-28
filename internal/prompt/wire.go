@@ -51,9 +51,14 @@ func render(tag string, parts []econtext.Part) string {
 		}
 	}
 	b.WriteString("</")
-	b.WriteString(strings.TrimPrefix(strings.TrimPrefix(tag, "<"), "</"))
+	b.WriteString(tagName(tag))
 	b.WriteString(">\n")
 	return b.String()
+}
+
+// tagName extracts the inner name from a section tag like "<files>" → "files".
+func tagName(tag string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(tag, "<"), ">")
 }
 
 // parseSections is the L5-002 round-trip parser: it splits rendered wire text
