@@ -103,7 +103,7 @@ func DefaultConfig() Config {
 			BatchTimeout:   5 * time.Second,
 			MetricInterval: 30 * time.Second,
 		},
-		Log:         LogConfig{Format: "text", Level: 20}, // 20 = slog.LevelInfo
+		Log:         LogConfig{Format: "text", Level: -4}, // -4 = slog.LevelDebug (the DEBUG transcript, §13.5.2)
 		Sentry:      SentryConfig{SampleRate: 1.0},
 		Permissions: PermissionsConfig{Mode: "auto"},
 		RateLimit:   RateLimitConfig{Rate: 2.0, Burst: 10.0},
