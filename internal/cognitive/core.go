@@ -64,15 +64,17 @@ func (c *Core) Think(ctx context.Context, msgs []prompt.Message) (Turn, error) {
 		}
 	}
 
-	// A turn is Final iff it produced no tool calls (File 07 §7.2.3); the
-	// visible answer is the accumulated text. The fenced-```tool parser lands
-	// in L6-002; Sprint 3's streaming path handles the structured-ToolCall case
-	// and marks Final when none arrived.
-	return Turn{
-		Text:      buf.String(),
-		Final:     len(toolCall) == 0,
-		ToolCalls: toolCall,
-	}, nil
+	// Parse the accumulated text for fenced ```tool blocks (File 07 §7.2.3,
+	// the provider-agnostic portable path). The parsed Turn carries the
+	// visible answer as Text and the parsed tool calls; Final iff no calls.
+	// Providers with native tool calls surface them as Chunk.ToolCall — those
+	// merge with the parsed ones so both paths produce a Turn.
+	turn := parseTurn(buf.String())
+	if len(toolCall) > 0 {
+		turn.ToolCalls = append(turn.ToolCalls, toolCall...)
+		turn.Final = false
+	}
+	return turn, nil
 }
 
 // publishTokens emits an llm.token event for a delta (File 07 §7.2.2). A nil
