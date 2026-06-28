@@ -13,9 +13,10 @@
 //
 // with one blank line of separation between sections. The tag set (§6.6.2):
 //
-//	<system>      role + tool schemas + rules
-//	<project>     AGENTS.md / project rules
-//	<files>       retrieved files, graph, diagnostics
+//	<system>       role + tool schemas + rules
+//	<project>      AGENTS.md / project rules
+//	<preferences>  recalled user preferences (File 11 §11.8, L10-006)
+//	<files>        retrieved files, graph, diagnostics
 //
 // (Conversation turns and the current user message are emitted bare, as their
 // own messages with role tags handled by the message envelope, not a section.)

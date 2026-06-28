@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/yolo-code/yolo/internal/event"
+	"github.com/yolo-code/yolo/internal/memory"
 	"github.com/yolo-code/yolo/internal/runtime"
 	"github.com/yolo-code/yolo/internal/session"
 )
@@ -37,6 +38,11 @@ func runHeadless(stdin io.Reader, seed int64) (string, error) {
 // Compiler + an asserting cognitive core so the headless transcript reflects a
 // real, compiled prompt carrying real file contents. Repo is the working-tree
 // root the Context Engine reads from; Open is the set of open files to gather.
+// L10-006 adds Memory + Bus: when both are set, the composition root wires a
+// memoryStoreAdapter behind runtime.MemoryStore (publishing a learning event on
+// the direct-answer path, §11.2). The caller owns the Store + Bus (the test
+// builds them so the memory listener is the event subscriber); runHeadlessDeps
+// uses deps.bus when provided and falls back to its own bus otherwise.
 type headlessDeps struct {
 	context runtime.ContextBuilder
 	prompt  runtime.PromptCompiler
@@ -44,6 +50,8 @@ type headlessDeps struct {
 	repo    string
 	open    []string
 	window  int
+	memory  *memory.Store
+	bus     *event.Bus
 }
 
 // runHeadlessDeps is the injectable form: real L4/L5 ports when deps is
@@ -60,8 +68,20 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 		return "", err
 	}
 	store := session.NewFileStore(dir)
+	// L10-006: when the caller injects a bus (the memory-wiring test does, so
+	// the memory listener it owns is the event subscriber), reuse it instead of
+	// making a fresh one — the runtime, the memory listener, and the headless
+	// transcript subscriber must all share one bus. The caller closes it.
+	// Otherwise make our own and close it on exit (Sprint 1 path).
 	bus := event.New()
-	defer func() { _ = bus.Close() }()
+	busOwned := true
+	if deps != nil && deps.bus != nil {
+		bus = deps.bus
+		busOwned = false
+	}
+	if busOwned {
+		defer func() { _ = bus.Close() }()
+	}
 
 	smgr := session.New(session.Deps{
 		Store: store, Bus: bus, Git: session.NewInMemCheckpointer(),
@@ -76,6 +96,14 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 		d.Context = deps.context
 		d.Prompt = deps.prompt
 		d.Cognitive = deps.cog
+		// L10-006: bridge memory into the runtime's MemoryStore port. The
+		// adapter publishes a learning event the memory listener reacts to (it
+		// does NOT mutate a sub-store directly — §11.2). Only wire it when the
+		// caller injected a Store; the Sprint 1/2 stub path leaves Memory nil
+		// and the runtime's nil-guard skips the Update call.
+		if deps.memory != nil {
+			d.Memory = memoryStoreAdapter{store: deps.memory, bus: bus}
+		}
 	} else {
 		// Sprint 1 stub path: a canned-answer stub core, noop context+prompt.
 		d.Cognitive = runtime.StubCognitive{Answer: cannedAnswer(prompt)}

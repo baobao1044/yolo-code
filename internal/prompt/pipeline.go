@@ -186,6 +186,17 @@ func (c *Compiler) order(pkg econtext.ContextPackage) []Message {
 	if len(pkg.Project) > 0 {
 		msgs = append(msgs, Message{Role: "system", Content: render("<project>", pkg.Project)})
 	}
+	// 2b. Recalled preferences (File 11 §11.8), role "system". The Preferences
+	// group is populated by Layer 4's Memory seam (the context.MemoryAdapter
+	// surfaces user prefs + project memory here). Sprint 2 left this slot empty
+	// (the noop Memory stub returns none), so order() never emitted it; L10-006
+	// wires the real memory.Store behind the seam, so the group now carries
+	// recalled memory that must reach the model. It is ordered within the system
+	// block — persistent guidance, like project rules — under its own stable
+	// <preferences> tag so the parser round-trips it (§6.6.2).
+	if len(pkg.Preferences) > 0 {
+		msgs = append(msgs, Message{Role: "system", Content: render("<preferences>", pkg.Preferences)})
+	}
 	// 3. The current request (user goal), role "user". The §6.4 ContextPackage
 	// omits a User field; Layer 4's Build fills it with the task goal. The
 	// current message is ordered third (§6.6.2) and is never trimmed (§6.7.3).

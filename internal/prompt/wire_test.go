@@ -140,11 +140,11 @@ func TestWireParseIgnoresNonTagLines(t *testing.T) {
 	}
 }
 
-// TestWireTagsAreStable pins that the three section tags are exactly the
+// TestWireTagsAreStable pins that the four section tags are exactly the
 // strings golden fixtures (L5-003) and the parser depend on — a change here
 // silently breaks round-tripping and byte-identical transcripts (S5).
 func TestWireTagsAreStable(t *testing.T) {
-	tags := []string{"<system>", "<project>", "<files>"}
+	tags := []string{"<system>", "<project>", "<preferences>", "<files>"}
 	for _, tag := range tags {
 		if !strings.HasPrefix(tag, "<") || !strings.HasSuffix(tag, ">") {
 			t.Errorf("tag %q is not bracketed; wire format requires <tag>", tag)

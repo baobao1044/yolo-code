@@ -16,6 +16,8 @@ import (
 	"context"
 
 	econtext "github.com/yolo-code/yolo/internal/context"
+	"github.com/yolo-code/yolo/internal/event"
+	"github.com/yolo-code/yolo/internal/memory"
 	"github.com/yolo-code/yolo/internal/prompt"
 	"github.com/yolo-code/yolo/internal/runtime"
 	"github.com/yolo-code/yolo/internal/session"
@@ -120,4 +122,78 @@ func containsStr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// --- L10-006 memory adapters (File 11 §11.8 + File 06 §6.1) ---
+//
+// The composition root bridges memory into the two seams it must satisfy:
+// runtime.MemoryStore.Update (the runtime's write trigger on the direct-answer
+// path) and context.Memory.Preferences/Project (the Context Engine's read
+// surface). Memory can't implement either directly (it may import only event +
+// stdlib; runtime/context are forbidden), so the adapters live here, exactly as
+// the context/prompt adapters do. The adapters translate memory.Part →
+// context.Part (matrix-driven duplication, File 15 §15.15.2) and route the
+// runtime's Update to a published event the memory listener reacts to — never
+// mutating a sub-store directly (§11.2).
+
+// memoryStoreAdapter satisfies runtime.MemoryStore. Update publishes a
+// task.completed-like learning event the memory listener reacts to (it does
+// NOT mutate a sub-store directly — the listener is the only writer, §11.2).
+// The runtime calls Update(ctx, taskID) on the direct-answer path; the adapter
+// turns that into a memory learning by publishing the event the listener
+// dispatches. The store + bus are owned by the composition root.
+type memoryStoreAdapter struct {
+	store *memory.Store
+	bus   *event.Bus
+}
+
+// Update satisfies runtime.MemoryStore. It publishes a memory-relevant event
+// (task.completed) so the listener persists the conversation + records the
+// learning — the event-driven path, not a direct write.
+func (a memoryStoreAdapter) Update(ctx context.Context, taskID session.TaskID) error {
+	if a.bus == nil {
+		return nil
+	}
+	return a.bus.Publish(ctx, &event.TaskCompletedEvent{Task: string(taskID)})
+}
+
+// contextMemoryAdapter satisfies context.Memory, surfacing memory's preferences
+// + project memory into the Context Engine (File 06 §6.1). It translates
+// memory.Part → context.Part field-for-field (the kinds line up; see
+// memory.PartKind vs context.PartKind).
+type contextMemoryAdapter struct {
+	store *memory.Store
+}
+
+// Preferences returns the user's preferences as context.Parts (one per key).
+func (a contextMemoryAdapter) Preferences(ctx context.Context, _ string) []econtext.Part {
+	if a.store == nil {
+		return nil
+	}
+	return toContextParts(a.store.Preferences().Preferences(ctx))
+}
+
+// Project returns the project memory (AGENTS.md) as context.Parts.
+func (a contextMemoryAdapter) Project(ctx context.Context, projectID string) []econtext.Part {
+	if a.store == nil {
+		return nil
+	}
+	return toContextParts(a.store.Project().Project(ctx))
+}
+
+// toContextParts translates memory.Part → context.Part field-for-field. The
+// kinds align (memory.KindPreferences → context.KindPreferences, etc.); the
+// adapter maps the kind string so the ranker/compress group them correctly.
+func toContextParts(ps []memory.Part) []econtext.Part {
+	out := make([]econtext.Part, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, econtext.Part{
+			Kind:   econtext.PartKind(p.Kind),
+			Source: p.Source,
+			Text:   p.Text,
+			Score:  p.Score,
+			Attr:   p.Attr,
+		})
+	}
+	return out
 }

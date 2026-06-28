@@ -238,6 +238,46 @@ func TestCompileIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestCompileEmitsPreferencesGroup is the L10-006 wire gap: the §6.6.2 order()
+// must emit pkg.Preferences so a recalled memory (File 11 §11.8, surfaced into
+// Layer 4's Preferences group by the context.Memory seam) reaches the model.
+// Sprint 2 gathered Preferences via the noop Memory stub (always empty), so
+// order() never needed to emit the group — but the group slot exists in the
+// ContextPackage (§6.4) and the ranker/compress populate it. With a non-empty
+// Preferences group the compiled prompt must carry its text under a
+// <preferences> tag, ordered within the system block (persistent guidance,
+// like project rules). This is RED until order() emits the group.
+func TestCompileEmitsPreferencesGroup(t *testing.T) {
+	pkg := context.ContextPackage{
+		System: []context.Part{{Kind: context.KindSystem, Source: "<system>", Text: "role"}},
+		Project: []context.Part{
+			{Kind: context.KindProject, Source: "AGENTS.md", Text: "Use table-driven tests."},
+		},
+		Preferences: []context.Part{
+			{Kind: context.KindPreferences, Source: "pref:test-style", Text: "I prefer table-driven tests"},
+		},
+		User:   []context.Part{{Kind: context.KindSystem, Source: "goal", Text: "write a test"}},
+		Budget: allocateBudget(50_000),
+	}
+	comp := New(nil, nil)
+	msgs := comp.CompilePackage(&pkg)
+
+	// The preference text must appear somewhere in the compiled prompt —
+	// otherwise a recalled memory never reaches the model (Sprint 7 exit bar).
+	joined := ""
+	for _, m := range msgs {
+		joined += m.Content
+	}
+	if !contains(joined, "I prefer table-driven tests") {
+		t.Error("compiled prompt dropped the Preferences group; a recalled memory did not surface in the prompt")
+	}
+	// The group must render under its stable <preferences> section tag (wire
+	// format §6.6.2) so the parser round-trips it and the tag set stays stable.
+	if !contains(joined, "<preferences>") || !contains(joined, "</preferences>") {
+		t.Error("compiled prompt missing <preferences>…</preferences> section tag; the Preferences group must render under its stable tag")
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
