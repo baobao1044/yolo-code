@@ -80,6 +80,10 @@ func (s *Sandbox) Classify(cmd string) event.Risk {
 		return RiskLow
 	}
 	head := tokens[0]
+	// Shell interpreters with -c are sub-execution gateways too.
+	if shellInterpreter[head] && hasFlag(tokens, "-c") {
+		return RiskCritical
+	}
 	// Network commands are high unless the host is allowlisted (L7-005 gates
 	// the actual connection; Classify flags the risk for HITL).
 	if networkCmds[head] {
@@ -141,11 +145,12 @@ func hasFlag(tokens []string, flag string) bool {
 // Command-class tables (File 08 §8.4.3). Kept as package vars so a later
 // ticket can let config extend them without rewriting Classify.
 var (
-	safeRead    = set("ls", "cat", "grep", "find", "git", "stat", "wc", "head", "tail", "diff")
-	buildTest   = set("go", "make", "cargo", "npm", "yarn", "pnpm", "pytest", "rake")
-	mutatingFS  = set("mv", "cp", "touch", "mkdir", "chmod", "chown", "git")
-	networkCmds = set("curl", "wget", "ssh", "scp", "rsync", "nc", "ftp", "telnet")
-	diskHeavy   = set("dd", "mkfs", "fdisk", "shred")
+	safeRead         = set("ls", "cat", "grep", "find", "git", "stat", "wc", "head", "tail", "diff")
+	buildTest        = set("go", "make", "cargo", "npm", "yarn", "pnpm", "pytest", "rake")
+	mutatingFS       = set("mv", "cp", "touch", "mkdir", "chmod", "chown", "git")
+	networkCmds      = set("curl", "wget", "ssh", "scp", "rsync", "nc", "ftp", "telnet")
+	diskHeavy        = set("dd", "mkfs", "fdisk", "shred")
+	shellInterpreter = set("bash", "sh", "zsh", "fish", "cmd", "powershell")
 )
 
 // set builds a lookup map from its arguments.
