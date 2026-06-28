@@ -131,6 +131,44 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.cost.aborted = true
 		m.cost.abortReason = e.Reason
 		m.banner = e.Reason
+
+	// --- Multi-agent board (TUI-009, File 14 §14.7.6) ---
+	case *event.PlanReadyEvent:
+		// Open the board with the planID (skeleton). PlanReadyEvent.Plan is a
+		// json.RawMessage — the TUI doesn't unpack it (no schema here; parsing
+		// belongs in the coord layer). Todos fill from the subsequent
+		// coord.task.assign events. The full plan body is an integration-sprint
+		// fill (spec gap, documented).
+		m.board = &boardView{planID: e.PlanID}
+	case *event.TaskAssignEvent:
+		// Append a todo column with the agent role + status "assigned". Ignored
+		// if no board is open (the board opens only on coord.plan.ready — the
+		// TUI doesn't fabricate one).
+		if m.board != nil {
+			m.board.todos = append(m.board.todos, todoView{
+				todoID: e.TodoID,
+				agent:  e.Agent,
+				status: "assigned",
+			})
+		}
+	case *event.CodeReadyEvent:
+		// Mark the todo "coded" (looked up by TodoID). A code.ready for an
+		// unknown todo is ignored (robustness — no fabrication).
+		boardUpdateTodo(m, e.TodoID, "coded")
+	case *event.ReviewVerdictEvent:
+		// Mark approved/rework by the Approved flag.
+		status := "rework"
+		if e.Approved {
+			status = "approved"
+		}
+		boardUpdateTodo(m, e.TodoID, status)
+	case *event.TestReportEvent:
+		// Mark tested:pass / tested:fail by the Passed flag.
+		status := "tested:fail"
+		if e.Passed {
+			status = "tested:pass"
+		}
+		boardUpdateTodo(m, e.TodoID, status)
 	}
 	return m, relaunchWatcher(m)
 }
@@ -143,4 +181,20 @@ func relaunchWatcher(m Model) tea.Cmd {
 		return nil
 	}
 	return busWatcher(m.sub, m.cancel)
+}
+
+// boardUpdateTodo advances a board todo's status (TUI-009). Looks up the todo
+// by TodoID; a no-op when no board is open or the todo doesn't exist yet
+// (robustness — the TUI never fabricates a todo). Pure: only mutates render
+// state when the lookup succeeds.
+func boardUpdateTodo(m Model, todoID, status string) {
+	if m.board == nil {
+		return
+	}
+	for i := range m.board.todos {
+		if m.board.todos[i].todoID == todoID {
+			m.board.todos[i].status = status
+			return
+		}
+	}
 }
