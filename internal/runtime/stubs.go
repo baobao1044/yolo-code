@@ -17,13 +17,13 @@ import (
 type noopContextBuilder struct{}
 
 func (noopContextBuilder) Build(context.Context, ContextRequest) (ContextPackage, error) {
-	return ContextPackage{}, nil
+	return nil, nil
 }
 
 // noopPromptCompiler returns the package unchanged.
 type noopPromptCompiler struct{}
 
-func (noopPromptCompiler) Compile(pkg ContextPackage) Prompt { return Prompt(pkg) }
+func (noopPromptCompiler) Compile(pkg ContextPackage) Prompt { return pkg }
 
 // StubCognitive is the L2-005 stubbed cognitive core: it always answers
 // directly (Final == true) with a canned message, so a prompt flows to a

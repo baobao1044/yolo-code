@@ -17,11 +17,14 @@ import (
 )
 
 // ContextPackage is the assembled, budgeted context the Context Engine (File 06)
-// produces. Opaque to the runtime — it passes it to the Prompt Compiler.
-type ContextPackage = []byte
+// produces and the Prompt Compiler consumes. Opaque to the runtime — it passes
+// it through. Typed as any so the real context.ContextPackage struct (Sprint 2)
+// flows without the runtime importing context.
+type ContextPackage = any
 
-// Prompt is the compiled prompt the Cognitive Core consumes. Opaque to runtime.
-type Prompt = []byte
+// Prompt is the compiled prompt the Cognitive Core consumes. Opaque to runtime;
+// any so the real prompt shape (Sprint 2+) flows through.
+type Prompt = any
 
 // ToolCall is a tool the Planner chose (File 07 §5.4.3 shape, collapsed).
 type ToolCall struct {
