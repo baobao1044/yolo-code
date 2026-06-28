@@ -12,6 +12,8 @@
 package tui
 
 import (
+	"strconv"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/yolo-code/yolo/internal/event"
@@ -70,6 +72,32 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 	case *event.ReflectionEvent:
 		// Dimmed inline note (File 14 §14.5).
 		m.messages = append(m.messages, messageView{role: "reflection", text: e.Note})
+
+	// --- Status bar (TUI-003, File 14 §14.7.4) ---
+	case *event.StateChangeEvent:
+		// The status bar's core line: copy the `To` label into m.state. The TUI
+		// does NOT model the FSM — it labels it (File 14 §14.4.2). This is the
+		// mutation guard: without it the bar never reflects the runtime's state.
+		m.state = e.To
+	case *event.ContextBuiltEvent:
+		// Flash "context ready" (File 14 §14.5). ContextBuiltEvent has no
+		// item/token count field (spec gap — File 14 idealizes "N items, B
+		// tokens"; the real event carries only Task). The flash is presence-
+		// based; a hardening pass that adds counts to L4 fills the figure.
+		m.contextFlash = "context ready"
+	case *event.MemoryUpdateEvent:
+		// Flash "+N <store>" (File 14 §14.5). MemoryUpdateEvent has Store + Items.
+		m.memoryFlash = "+" + strconv.Itoa(e.Items) + " " + e.Store
+	case *event.TaskCompletedEvent:
+		// Terminal state (File 14 §14.5): the bar reads "DONE".
+		m.state = "DONE"
+	case *event.TaskCancelledEvent:
+		// Terminal state + banner (the cancel reason). Partial work is noted.
+		m.state = "CANCELLED"
+		m.banner = e.Reason
+	case *event.TaskPausedEvent:
+		// The TUI labels PAUSED (it doesn't drive the FSM; the runtime does).
+		m.state = "PAUSED"
 	}
 	return m, relaunchWatcher(m)
 }
