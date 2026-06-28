@@ -2,6 +2,7 @@ package event
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -9,7 +10,8 @@ import (
 
 // testEvent is a minimal Event used across bus tests. It lives in the test
 // package because the real event catalog (L3-006) defines concrete types; the
-// bus itself must be agnostic to them.
+// bus itself must be agnostic to them. It carries custom JSON so the durability
+// log (L3-004) can round-trip it.
 type testEvent struct {
 	task TaskID
 	typ  Topic
@@ -17,6 +19,27 @@ type testEvent struct {
 
 func (e testEvent) Type() Topic      { return e.typ }
 func (e testEvent) CausalID() TaskID { return e.task }
+
+// MarshalJSON/UnmarshalJSON let testEvent survive a durability round-trip
+// (its fields are unexported, so encoding/json would otherwise drop them).
+func (e testEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Task TaskID `json:"task"`
+		Typ  Topic  `json:"typ"`
+	}{Task: e.task, Typ: e.typ})
+}
+
+func (e *testEvent) UnmarshalJSON(data []byte) error {
+	var v struct {
+		Task TaskID `json:"task"`
+		Typ  Topic  `json:"typ"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	e.task, e.typ = v.Task, v.Typ
+	return nil
+}
 
 func ping(task string) testEvent      { return testEvent{task: TaskID(task), typ: "test.ping"} }
 func pingAt(typ string) testEvent     { return testEvent{task: "t", typ: Topic(typ)} }

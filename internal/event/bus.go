@@ -60,12 +60,13 @@ const subscriberBuf = 64
 
 // Bus is the system backbone. One instance per session.
 type Bus struct {
-	next     atomic.Uint64 // monotonic Seq source
-	subsMu   sync.Mutex    // guards the subs slice (Subscribe / Close)
+	next     atomic.Uint64   // monotonic Seq source
+	subsMu   sync.Mutex      // guards the subs slice (Subscribe / Close)
 	subs     []subscription
-	fanoutMu sync.Mutex // serializes stamp + fan-out → per-subscriber FIFO
+	fanoutMu sync.Mutex // serializes stamp + durability + fan-out → FIFO
 	closed   atomic.Bool
-	closeCh  chan struct{} // closed by Close to unblock stalled fan-outs
+	closeCh  chan struct{}    // closed by Close to unblock stalled fan-outs
+	log      appender         // nil for New(); set by Open() for durability
 }
 
 type subscription struct {
@@ -73,14 +74,37 @@ type subscription struct {
 	ch     chan Envelope
 }
 
-// New returns a ready-to-use Bus.
+// New returns a ready-to-use, in-memory Bus with no durability log. Use Open
+// when events must survive a crash.
 func New() *Bus { return &Bus{closeCh: make(chan struct{})} }
+
+// Open returns a Bus whose events are fsynced to an append-only log at path
+// before any subscriber sees them (durability before visibility, File 05
+// §5.3). The log is closed by Close.
+func Open(path string) (*Bus, error) {
+	l, err := OpenLog(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Bus{closeCh: make(chan struct{}), log: l}, nil
+}
+
+// newBusWithAppender is a test seam for injecting a durability sink.
+func newBusWithAppender(a appender) *Bus {
+	return &Bus{closeCh: make(chan struct{}), log: a}
+}
 
 // Subscribe registers a new subscriber for the given topics and returns its
 // receive channel. A topic of the form "prefix.>" matches any topic that
 // starts with "prefix.". Repeated calls each yield an independent subscriber.
 func (b *Bus) Subscribe(topics ...Topic) <-chan Envelope {
-	ch := make(chan Envelope, subscriberBuf)
+	return b.subscribe(topics, subscriberBuf)
+}
+
+// subscribe is the test-visible core: lets a caller pick the channel buffer
+// size (e.g. 0 to force synchronous delivery in ordering tests).
+func (b *Bus) subscribe(topics []Topic, buf int) <-chan Envelope {
+	ch := make(chan Envelope, buf)
 	b.subsMu.Lock()
 	b.subs = append(b.subs, subscription{topics: topics, ch: ch})
 	b.subsMu.Unlock()
@@ -108,6 +132,14 @@ func (b *Bus) Publish(ctx context.Context, e Event) error {
 
 	seq := b.next.Add(1)
 	env := Envelope{Seq: seq, At: time.Now().UTC(), Evt: e}
+
+	// Durability before visibility (P3): fsync the envelope before any
+	// subscriber can see it. A failure here means the event never fans out.
+	if b.log != nil {
+		if err := b.log.Append(env); err != nil {
+			return err
+		}
+	}
 
 	b.subsMu.Lock()
 	subs := append([]subscription(nil), b.subs...)
@@ -146,6 +178,12 @@ func (b *Bus) Close() error {
 	b.subs = nil
 	b.subsMu.Unlock()
 	b.fanoutMu.Unlock()
+
+	// Release the durability log after fan-out is quiesced so any in-flight
+	// Append completes before the file handle goes away.
+	if b.log != nil {
+		_ = b.log.Close()
+	}
 	return nil
 }
 
