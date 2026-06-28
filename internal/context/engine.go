@@ -91,6 +91,11 @@ func (e *Engine) Build(ctx stdctx.Context, req ContextRequest) (*ContextPackage,
 	ranked := e.rank(parts, req)
 	pkg := e.compress(ranked)
 	pkg.Task = req.Task.ID
+	// The current request (the user's goal for this task) is its own group,
+	// ordered third after system + project (File 06 §6.6.2 order() reads
+	// pkg.User[0].Text). The §6.4 ContextPackage struct omits a User field;
+	// Build fills it from the task goal.
+	pkg.User = []Part{{Kind: KindSystem, Source: "goal", Text: req.Task.Goal}}
 	pkg.Budget = allocate(e.window)
 	_ = e.bus.Publish(ctx, &event.ContextBuiltEvent{Task: event.TaskID(req.Task.ID)})
 	return pkg, nil
@@ -164,7 +169,10 @@ func (e *Engine) readProjectRules() string {
 }
 
 // gatherConversation projects the task's history into Conversation parts. Each
-// entry becomes a part with its summary as text; the most recent first.
+// entry becomes a part with its summary as text; the most recent first. Each
+// part carries role="assistant" in Attr — history records what the agent did,
+// so the Prompt Compiler (§6.6.2 order() reads h.Attr["role"]) emits them as
+// assistant turns.
 func (e *Engine) gatherConversation(req ContextRequest) []Part {
 	if req.Task == nil {
 		return nil
@@ -174,7 +182,7 @@ func (e *Engine) gatherConversation(req ContextRequest) []Part {
 	for _, h := range hist {
 		parts = append(parts, Part{
 			Kind: KindConversation, Source: "history#" + itoa(h.Seq),
-			Text: h.Summary, Recency: h.At,
+			Text: h.Summary, Recency: h.At, Attr: map[string]string{"role": "assistant"},
 		})
 	}
 	// Newest first so the ranker's recency signal orders naturally.

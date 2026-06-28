@@ -41,14 +41,17 @@ type Group string
 
 // Part is one unit of context: a kind, a source label (e.g. a file path), the
 // rendered text, and attribution used by the ranker (timestamp, score, and
-// whether the user explicitly @-referenced it).
+// whether the user explicitly @-referenced it). Attr carries optional metadata
+// the Prompt Compiler reads when ordering (e.g. role="assistant" on a
+// conversation turn, File 06 §6.6.2 order() reads h.Attr["role"]).
 type Part struct {
-	Kind     PartKind  `json:"kind"`
-	Source   string    `json:"source"` // file path / "AGENTS.md" / "turn#3"
-	Text     string    `json:"text"`
-	Score    float64   `json:"score"`    // assigned by rank()
-	Recency  time.Time `json:"recency"`  // when this part was last relevant
-	Explicit bool      `json:"explicit"` // user @-referenced
+	Kind     PartKind          `json:"kind"`
+	Source   string            `json:"source"` // file path / "AGENTS.md" / "turn#3"
+	Text     string            `json:"text"`
+	Score    float64           `json:"score"`    // assigned by rank()
+	Recency  time.Time         `json:"recency"`  // when this part was last relevant
+	Explicit bool              `json:"explicit"` // user @-referenced
+	Attr     map[string]string `json:"attr,omitempty"`
 }
 
 // ContextRequest is the input to Engine.Build: the task being driven and the
@@ -75,7 +78,9 @@ type Budget struct {
 
 // ContextPackage is the structured, ranked, compressed bundle handed to the
 // Prompt Compiler (File 06 §6.4). It is structured, not a flat string: the
-// compiler orders these groups deterministically.
+// compiler orders these groups deterministically. The User group carries the
+// current request (the task's goal); the §6.6.2 order() references
+// pkg.User[0].Text, which the §6.4 struct omits — Engine.Build fills it.
 type ContextPackage struct {
 	Task         session.TaskID
 	System       []Part
@@ -85,5 +90,6 @@ type ContextPackage struct {
 	Graph        []Part
 	Diagnostics  []Part
 	Preferences  []Part
+	User         []Part // the current request (task goal); ordered third
 	Budget       Budget
 }
