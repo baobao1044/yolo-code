@@ -161,8 +161,12 @@ func locate(content string, b Block) (int, error) {
 		// default — never guess.
 		return 0, ErrNotFound
 	default:
-		// Anchor disambiguation (later ticket) picks the hit surrounded by
-		// the anchor text; without it, ambiguous is a loud reject.
+		// Anchor disambiguation (L9-003, File 10 §10.2.2): a multi-hit Search
+		// resolves via the surrounding Anchor context; still-ambiguous →
+		// reject. Without an anchor, ambiguous is a loud reject.
+		if b.Anchor != "" {
+			return disambiguate(content, b.Search, b.Anchor)
+		}
 		return 0, fmt.Errorf("%w (matched %d times)", ErrAmbiguous, len(hits))
 	}
 }
