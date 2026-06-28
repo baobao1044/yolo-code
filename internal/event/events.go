@@ -316,3 +316,27 @@ type ErrorEvent struct {
 
 func (e *ErrorEvent) Type() Topic      { return "error" }
 func (e *ErrorEvent) CausalID() TaskID { return e.Task }
+
+// --- Cost: degradation ladder + hard abort (File 07 §7.6.2/§7.6.3) ---
+
+// CostDegradedEvent signals the auto-degradation ladder stepped down a rung:
+// after MaxLoops reflection loops the Core disables reflection (only-verify
+// mode); further failure autosubmits. The TUI's cost meter (File 14) renders
+// the rung live.
+type CostDegradedEvent struct {
+	Task  TaskID `json:"task"`
+	Stage string `json:"stage"` // "reflection_disabled" | "autosubmit"
+}
+
+func (e *CostDegradedEvent) Type() Topic      { return "cost.degraded" }
+func (e *CostDegradedEvent) CausalID() TaskID { return e.Task }
+
+// CostAbortEvent signals a hard cap (spend or time) was hit and the task
+// aborts, surfacing to the user (File 07 §7.6.2).
+type CostAbortEvent struct {
+	Task   TaskID `json:"task"`
+	Reason string `json:"reason"` // "spend cap" | "time cap"
+}
+
+func (e *CostAbortEvent) Type() Topic      { return "cost.abort" }
+func (e *CostAbortEvent) CausalID() TaskID { return e.Task }

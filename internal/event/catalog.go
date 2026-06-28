@@ -31,6 +31,8 @@ func init() {
 	Register("llm.thinking", func() Event { return &ThinkingEvent{} })
 	Register("assistant.message", func() Event { return &AssistantMessageEvent{} })
 	Register("tool.call", func() Event { return &ToolCallEvent{} })
+	Register("cost.degraded", func() Event { return &CostDegradedEvent{} })
+	Register("cost.abort", func() Event { return &CostAbortEvent{} })
 
 	// L7: Execution.
 	Register("tool.result", func() Event { return &ToolResultEvent{} })
