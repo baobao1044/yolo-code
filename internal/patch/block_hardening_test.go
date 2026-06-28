@@ -8,16 +8,16 @@ import "testing"
 
 func TestParseBlocksNoPanicOnMalformedInput(t *testing.T) {
 	cases := []string{
-		"",                                           // empty input
-		"no markers here",                            // no block markers
-		"<<<<<<< SEARCH",                             // open never closed
-		"<<<<<<< SEARCH\nold",                        // missing =======
-		"<<<<<<< SEARCH\nold\n=======",               // missing >>>>>>> REPLACE
-		"=======\nnew\n>>>>>>> REPLACE",             // ======= before SEARCH
-		">>>>>>> REPLACE",                            // stray REPLACE marker
+		"",                              // empty input
+		"no markers here",               // no block markers
+		"<<<<<<< SEARCH",                // open never closed
+		"<<<<<<< SEARCH\nold",           // missing =======
+		"<<<<<<< SEARCH\nold\n=======",  // missing >>>>>>> REPLACE
+		"=======\nnew\n>>>>>>> REPLACE", // ======= before SEARCH
+		">>>>>>> REPLACE",               // stray REPLACE marker
 		"<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE\n<<<<<<< SEARCH", // nested/unfinished
 		"<<<<<<< SEARCH\n<<<<<<< SEARCH\n=======\n>>>>>>> REPLACE",       // nested SEARCH
-		"\x00\x01\x02",                              // binary garbage
+		"\x00\x01\x02", // binary garbage
 		"<<<<<<< SEARCH\n" + string(make([]byte, 1<<16)) + "\n=======\ny\n>>>>>>> REPLACE", // large block
 	}
 
