@@ -21,7 +21,16 @@ import (
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case busMsg:
+		// A bus event folds into render state + re-launches the watcher. TUI-007
+		// coalesces the repaint: fold accumulates every delta, and the 60 Hz
+		// tick (armed once in Init, re-arming itself in the tickMsg case) drives
+		// the actual repaint — so a fast token stream doesn't paint per-event.
 		return fold(m, msg.env)
+	case tickMsg:
+		// 60 Hz repaint + spinner advance (TUI-007). Re-arms itself via nextTick
+		// so the loop continues without a per-event re-arm (which would leak
+		// a goroutine per event).
+		return tick(m)
 	case quitMsg:
 		return m, tea.Quit
 	}

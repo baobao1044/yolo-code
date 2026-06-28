@@ -140,13 +140,14 @@ func newModel(sub <-chan event.Envelope, pub EventPublisher) Model {
 	}
 }
 
-// Init launches the first busWatcher so the bridge starts pumping the moment
-// the program runs (File 14 §14.11). Returns nil (no watcher) when there's no
-// subscription channel — keeps the pure-projection model usable in tests
-// without a bus.
+// Init launches the first busWatcher + the first 60 Hz tick so the bridge
+// starts pumping and the spinner animates the moment the program runs (File 14
+// §14.11, §14.9.3). Returns nil (no watcher/tick) when there's no subscription
+// channel — keeps the pure-projection model usable in tests without a bus.
+// The tick re-arms itself in the tickMsg case (Update), so Init arms it once.
 func (m Model) Init() tea.Cmd {
 	if m.sub == nil {
 		return nil
 	}
-	return busWatcher(m.sub, m.cancel)
+	return tea.Batch(busWatcher(m.sub, m.cancel), nextTick)
 }
