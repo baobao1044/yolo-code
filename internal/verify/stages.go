@@ -49,10 +49,13 @@ type StageRunner interface {
 
 // PipelineDeps wires the pipeline's stages. Runner and FS are the seams; the
 // AST stage builds its own patch.Validator (one validator per pipeline —
-// stateless). The verify Engine wraps this with an event Bus (see engine.go).
+// stateless). Cache is the L8-005 unchanged-file result cache; nil means every
+// stage runs its own logic (no skip). The verify Engine wraps this with an
+// event Bus (see engine.go).
 type PipelineDeps struct {
 	Runner Runner
 	FS     FS
+	Cache  *FileCache
 }
 
 // Pipeline runs the 7 stages in canonical order, short-circuiting on a fail.
@@ -65,7 +68,7 @@ type Pipeline struct {
 // separate ordering table.
 func NewPipeline(d PipelineDeps) *Pipeline {
 	return &Pipeline{stages: []StageRunner{
-		&astStage{fs: d.FS, validator: patch.NewValidator()},
+		&astStage{fs: d.FS, validator: patch.NewValidator(), cache: d.Cache},
 		&formatStage{runner: d.Runner},
 		&lintStage{runner: d.Runner},
 		&typeCheckStage{runner: d.Runner},
@@ -96,27 +99,52 @@ func (p *Pipeline) Run(ctx context.Context, files []string) []StageResult {
 // astStage re-parses each changed file via patch.Validator (the stdlib
 // go/parser validator, L9-004). A parse error is a fail — a correctly-located
 // patch can still break syntax. Unknown extensions skip (the validator returns
-// nil for .md/.txt), so a Markdown edit doesn't fail for "no grammar".
+// nil for .md/.txt), so a Markdown edit doesn't fail for "no grammar". The
+// L8-005 cache short-circuits a re-verify of an unchanged file: a content-hash
+// hit returns the cached StageResult as a SevSkip ("cached: unchanged content")
+// so the trace shows the file was skipped, not re-validated.
 type astStage struct {
 	fs        FS
 	validator *patch.Validator
+	cache     *FileCache // L8-005: nil → no caching, every file re-validates.
 }
 
 func (s *astStage) Name() Stage { return StageAST }
 
 func (s *astStage) Run(ctx context.Context, files []string) StageResult {
 	var issues []Issue
+	cachedFiles := 0
 	for _, f := range files {
 		content, err := s.fs.Read(ctx, f)
 		if err != nil {
 			return StageResult{Stage: StageAST, Status: SevFail, Detail: "read " + f + ": " + err.Error()}
 		}
+		// L8-005: a cache hit short-circuits this file — re-verify of an
+		// unchanged file is O(1) (one read for the hash, no re-parse). Only a
+		// cached PASS is reused; a cached fail isn't (a later patch may have
+		// fixed it — and the content hash differs after any edit, so this branch
+		// only fires when the content is byte-identical to the cached pass).
+		if cached, ok := s.cache.Lookup(f, StageAST, content); ok && cached.Status == SevPass {
+			cachedFiles++
+			continue
+		}
 		if err := s.validator.Validate(f, content); err != nil {
 			issues = append(issues, Issue{Path: f, Code: "ast", Message: err.Error()})
+		} else {
+			// File validated clean → record it so the next unchanged verify hits.
+			s.cache.Record(f, StageAST, content, StageResult{
+				Stage: StageAST, Status: SevPass, Detail: "ast valid",
+			})
 		}
 	}
 	if len(issues) > 0 {
 		return StageResult{Stage: StageAST, Status: SevFail, Detail: "syntax error", Issues: issues}
+	}
+	// Every file was a cache hit → the whole stage is a skip (re-verify of
+	// unchanged files is O(1)). A mixed batch (some cached, some validated)
+	// reports a pass — the stage did real work for the uncached files.
+	if cachedFiles == len(files) && len(files) > 0 {
+		return StageResult{Stage: StageAST, Status: SevSkip, Detail: "cached: unchanged content"}
 	}
 	return StageResult{Stage: StageAST, Status: SevPass, Detail: "ast valid"}
 }
