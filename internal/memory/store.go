@@ -12,6 +12,7 @@
 package memory
 
 import (
+	"context"
 	"sync"
 
 	"github.com/yolo-code/yolo/internal/event"
@@ -58,6 +59,14 @@ func Open(d Deps) (*Store, error) {
 		repo:         NewProjectStore(d.Root),
 		knowledge:    NewSemanticStore(),
 		pref:         NewPreferenceStore(d.Root),
+	}
+	// Eager-load the cross-session stores (§11.3.3 + §11.5.2). Preference
+	// memory is per-user, cross-project (shared file), so Open re-reads it so
+	// a preference set in session A is recalled in session B (the L10-005 exit
+	// bar). Conversation/exec-history are per-session/task and load on Resume
+	// (when the specific session/task is known); Open leaves them empty.
+	if err := s.pref.Load(context.Background()); err != nil {
+		return nil, err
 	}
 	if d.Bus != nil {
 		s.listen(d.Bus) // start the listener goroutine (the only sub-store writer)
