@@ -29,8 +29,11 @@ func run(args []string) error {
 		}
 	}
 	if !headless {
-		// No TUI yet (Sprint 9); print a hint so `yolo` is not a silent no-op.
-		fmt.Fprintln(os.Stderr, "yolo: interactive TUI not built yet — use `yolo --headless`")
+		// TUI is built (Sprint 9) but interactive wiring lands in the integration
+		// sprint (the runtime doesn't subscribe to user.* yet — see Sprint 9
+		// spec Decision 4). Until then the interactive path can't drive the
+		// runtime, so keep the hint pointing at --headless.
+		fmt.Fprintln(os.Stderr, "yolo: interactive TUI pending integration wiring — use `yolo --headless`")
 		return nil
 	}
 	out, err := runHeadlessCtx(context.Background(), os.Stdin, 0)
