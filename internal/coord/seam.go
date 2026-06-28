@@ -40,7 +40,7 @@ type EventPublisher interface {
 // real per-agent drive (cognitive core + exec engine + scoped tools against a
 // live repo) is the integration sprint (Decision 1).
 type AgentRunner interface {
-	Run(ctx context.Context, role string, task event.TaskAssignEvent) error
+	Run(ctx context.Context, role Role, task event.TaskAssignEvent) error
 }
 
 // Planner decomposes a goal into a Plan + the Mode it chose (File 12
