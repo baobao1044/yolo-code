@@ -42,3 +42,28 @@ func TestS1ColdStartBudget(t *testing.T) {
 		t.Fatalf("warm init %v exceeds 10ms budget", warm)
 	}
 }
+
+// TestS2TokenToScreenBudget measures the time from token events to rendered
+// output (S2). 1 000 token deltas must fold and produce a View in ≤ 50 ms.
+func TestS2TokenToScreenBudget(t *testing.T) {
+	m := newModel(nil, nil)
+	m, _ = fold(m, event.Envelope{
+		Evt: &event.TaskStartedEvent{Task: "t-2", Goal: "token stream"},
+	})
+
+	const tokens = 1000
+	tokenEnv := event.Envelope{
+		Evt: &event.TokenEvent{Task: "t-2", Delta: "x"},
+	}
+
+	start := time.Now()
+	for i := 0; i < tokens; i++ {
+		m, _ = fold(m, tokenEnv)
+	}
+	_ = m.View()
+	elapsed := time.Since(start)
+
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("token-to-screen %v exceeds 50ms budget", elapsed)
+	}
+}

@@ -83,3 +83,15 @@ jobs:
       - name: Cross-compile release targets
         run: make cross
         shell: bash
+
+  snapshot:
+    # S1 cold-start and S2 token-to-screen performance budgets (H-002/H-003).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Snapshot budgets
+        run: make test-snapshot
+        shell: bash

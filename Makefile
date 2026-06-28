@@ -37,6 +37,11 @@ test-race:
 test-golden:
 	$(GO) test -tags=golden ./...
 
+# Snapshot performance budgets (S1/S2). Isolated by build tag so micro-
+# benchmarks don't slow the default loop.
+test-snapshot:
+	$(GO) test -tags=snapshot ./internal/tui
+
 lint:
 	golangci-lint run --timeout=5m
 
