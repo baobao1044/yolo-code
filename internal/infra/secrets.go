@@ -17,6 +17,7 @@
 package infra
 
 import (
+	"errors"
 	"regexp"
 	"sync"
 )
@@ -140,7 +141,7 @@ func defaultSecretPatterns() []SecretPattern {
 
 // errNilPattern is returned by Register when the pattern's compiled regexp is
 // nil (a nil regexp would panic on Match/ReplaceAllString).
-var errNilPattern = errString("infra.Secrets.Register: nil pattern")
+var errNilPattern = errors.New("infra.Secrets.Register: nil pattern")
 
 // mustCompile is a test helper (regexp.MustCompile panics on a bad pattern;
 // tests want the panic localized to the test, not the package). Defined here so

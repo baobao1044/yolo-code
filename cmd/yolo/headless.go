@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/yolo-code/yolo/internal/event"
+	"github.com/yolo-code/yolo/internal/infra"
 	"github.com/yolo-code/yolo/internal/memory"
 	"github.com/yolo-code/yolo/internal/runtime"
 	"github.com/yolo-code/yolo/internal/session"
@@ -43,6 +44,13 @@ func runHeadless(stdin io.Reader, seed int64) (string, error) {
 // the direct-answer path, §11.2). The caller owns the Store + Bus (the test
 // builds them so the memory listener is the event subscriber); runHeadlessDeps
 // uses deps.bus when provided and falls back to its own bus otherwise.
+//
+// L12-009 adds Infra: when set, the caller already called infra.Start on the
+// shared bus (so it owns the aggregate for post-run assertions). runHeadlessDeps
+// then owns the Stop — it runs after the bus closes in the close chain, so the
+// root subscriber range ends → done closes → Stop's wait returns promptly (no
+// goroutine leak). Infra is a pure observer (§13.1.2): it adds no events, so the
+// transcript stays byte-identical to the unwired run.
 type headlessDeps struct {
 	context runtime.ContextBuilder
 	prompt  runtime.PromptCompiler
@@ -52,6 +60,7 @@ type headlessDeps struct {
 	window  int
 	memory  *memory.Store
 	bus     *event.Bus
+	infra   *infra.Infra // L12-009: caller Start'd it on deps.bus; runHeadlessDeps owns the Stop.
 }
 
 // runHeadlessDeps is the injectable form: real L4/L5 ports when deps is
@@ -150,6 +159,14 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 	// Close the bus so the subscriber drain ends and the transcript is flushed.
 	_ = bus.Close()
 	wg.Wait()
+	// L12-009: with Infra wired, the root subscriber's range ended (the bus just
+	// closed) so done is closed and Stop's wait returns promptly — flush the
+	// observers. Bound by the run's ctx so a misbehaving flush can't hang the
+	// headless exit; the stubs are no-ops so this is effectively free. Skipped
+	// when no Infra is wired (the Sprint 1 path).
+	if deps != nil && deps.infra != nil {
+		_ = deps.infra.Stop(ctx)
+	}
 	return out.String(), nil
 }
 
