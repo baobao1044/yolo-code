@@ -67,21 +67,43 @@ func (heuristicSummarizer) Summarize(_ context.Context, text string, max int) st
 	return ""
 }
 
+// Redactor masks secret shapes in a tool's output (File 08 §8.4.5, first
+// redaction boundary). exec can't import infra (import matrix, bottom-up —
+// infra is L12), so the registry lives in infra and the composition root injects
+// an adapter satisfying this seam. A nil Redactor falls back to the package's
+// local redact() (the Sprint 4 patterns), so a default-wired engine keeps the
+// same redaction behavior with no infra dependency.
+type Redactor interface {
+	Redact(s string) string
+}
+
 // observationNormalizer implements the Normalizer interface (engine.go) with
 // the redact → truncate → summarize pipeline (File 08 §8.6.2). Unexported;
 // built via NewNormalizer.
 type observationNormalizer struct {
 	limits     OutputLimits
 	summarizer Summarizer
+	redactor   Redactor
 }
 
 // NewNormalizer builds a Normalizer with the given limits and summarizer. A
-// nil summarizer falls back to the heuristic one (no model call).
+// nil summarizer falls back to the heuristic one (no model call). A nil
+// redactor falls back to the package's local redact() (the Sprint 4 patterns).
 func NewNormalizer(limits OutputLimits, sum Summarizer) Normalizer {
 	if sum == nil {
 		sum = heuristicSummarizer{}
 	}
-	return observationNormalizer{limits: limits, summarizer: sum}
+	return observationNormalizer{limits: limits, summarizer: sum, redactor: nil}
+}
+
+// NewNormalizerWithRedactor is the composition-root entry: inject a Redactor
+// (backed by infra.Secrets via an adapter) so the redaction boundary uses the
+// shared registry. A nil redactor still works (falls back to local redact()).
+func NewNormalizerWithRedactor(limits OutputLimits, sum Summarizer, r Redactor) Normalizer {
+	if sum == nil {
+		sum = heuristicSummarizer{}
+	}
+	return observationNormalizer{limits: limits, summarizer: sum, redactor: r}
 }
 
 // Normalize runs the pipeline (File 08 §8.6.2): redact secrets, truncate each
@@ -90,8 +112,8 @@ func NewNormalizer(limits OutputLimits, sum Summarizer) Normalizer {
 // pre-truncation total so a consumer can tell how much was dropped.
 func (n observationNormalizer) Normalize(out ToolOutput, meta Metadata) Observation {
 	raw := out
-	raw.Stdout = redact(raw.Stdout, meta.Permission.Secret)
-	raw.Stderr = redact(raw.Stderr, meta.Permission.Secret)
+	raw.Stdout = n.doRedact(raw.Stdout, meta.Permission.Secret)
+	raw.Stderr = n.doRedact(raw.Stderr, meta.Permission.Secret)
 
 	stdout, stdTrunc := n.truncate(raw.Stdout, n.limits.StdoutSoft, n.limits.StdoutHard)
 	stderr, errTrunc := n.truncate(raw.Stderr, n.limits.StderrSoft, n.limits.StderrHard)
@@ -168,4 +190,19 @@ func redact(s string, _ bool) string {
 	s = secretKVRe.ReplaceAllString(s, "$1=***")
 	s = pemRe.ReplaceAllString(s, "***PEM_BLOCK***")
 	return s
+}
+
+// doRedact delegates to the injected Redactor (the infra.Secrets-backed
+// adapter, when the composition root wired one) and falls back to the package's
+// local redact() when no Redactor was injected. The Secret:true flag is honored
+// by both paths: the local redact() always runs its patterns, and an injected
+// registry's Redact always runs its patterns too (the §13.7.1 defaults include
+// the same shapes). A tool declaring Secret:true wants its output treated as
+// sensitive regardless of pattern match — the fallback handles that via the
+// always flag; an injected registry's Redact already masks known shapes.
+func (n observationNormalizer) doRedact(s string, secret bool) string {
+	if n.redactor != nil {
+		return n.redactor.Redact(s)
+	}
+	return redact(s, secret)
 }
