@@ -52,15 +52,19 @@ func runHeadless(stdin io.Reader, seed int64) (string, error) {
 // goroutine leak). Infra is a pure observer (§13.1.2): it adds no events, so the
 // transcript stays byte-identical to the unwired run.
 type headlessDeps struct {
-	context runtime.ContextBuilder
-	prompt  runtime.PromptCompiler
-	cog     runtime.CognitiveCore
-	repo    string
-	open    []string
-	window  int
-	memory  *memory.Store
-	bus     *event.Bus
-	infra   *infra.Infra // L12-009: caller Start'd it on deps.bus; runHeadlessDeps owns the Stop.
+	context  runtime.ContextBuilder
+	prompt   runtime.PromptCompiler
+	cog      runtime.CognitiveCore
+	exec     runtime.Executor
+	verify   runtime.Verifier
+	patcher  runtime.Patcher
+	restorer runtime.Restorer
+	repo     string
+	open     []string
+	window   int
+	memory   *memory.Store
+	bus      *event.Bus
+	infra    *infra.Infra // L12-009: caller Start'd it on deps.bus; runHeadlessDeps owns the Stop.
 }
 
 // runHeadlessDeps is the injectable form: real L4/L5 ports when deps is
@@ -105,6 +109,10 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 		d.Context = deps.context
 		d.Prompt = deps.prompt
 		d.Cognitive = deps.cog
+		d.Exec = deps.exec
+		d.Verify = deps.verify
+		d.Patch = deps.patcher
+		d.Restore = deps.restorer
 		// L10-006: bridge memory into the runtime's MemoryStore port. The
 		// adapter publishes a learning event the memory listener reacts to (it
 		// does NOT mutate a sub-store directly — §11.2). Only wire it when the

@@ -256,6 +256,7 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 				}
 				if h.ckptName != "" {
 					_ = c.restore.Restore(ctx, h.id, h.ckptName)
+					_ = c.bus.Publish(ctx, &event.RestoredEvent{Task: string(h.id), Name: h.ckptName})
 				}
 				dec := c.cog.Reflect(ctx, h.task, verdict, h.lastObs)
 				if dec.Abort {
