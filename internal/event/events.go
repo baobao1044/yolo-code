@@ -134,9 +134,26 @@ type ReflectionEvent struct {
 func (e *ReflectionEvent) Type() Topic      { return "reflection.note" }
 func (e *ReflectionEvent) CausalID() TaskID { return e.Task }
 
+// PatchFile is one file's contribution to a patch.applied summary: how many
+// lines were added/removed and whether the file was newly created. The list is
+// ordered (path-sorted) for deterministic transcripts (S5).
+type PatchFile struct {
+	Path       string `json:"path"`
+	Insertions int    `json:"insertions"`
+	Deletions  int    `json:"deletions"`
+	New        bool   `json:"new"`
+}
+
+// PatchAppliedEvent announces a successful apply (File 05 §5.4.4, File 10
+// §10.6): the diff summary — files touched, insertions, deletions — so the
+// transcript/TUI can show what changed. The per-file Files list is
+// path-sorted (deterministic); Insertions/Deletions are the totals.
 type PatchAppliedEvent struct {
-	Task     TaskID          `json:"task"`
-	Snapshot json.RawMessage `json:"snapshot"`
+	Task       TaskID          `json:"task"`
+	Snapshot   json.RawMessage `json:"snapshot"`
+	Files      []PatchFile     `json:"files"`
+	Insertions int             `json:"insertions"`
+	Deletions  int             `json:"deletions"`
 }
 
 func (e *PatchAppliedEvent) Type() Topic      { return "patch.applied" }

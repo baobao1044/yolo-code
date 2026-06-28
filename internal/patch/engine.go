@@ -24,6 +24,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/yolo-code/yolo/internal/event"
 )
 
 // ErrFileNotExist signals a path the Filesystem doesn't have. Apply treats it
@@ -57,11 +59,14 @@ type Checkpointer interface {
 }
 
 // Deps are the engine's collaborators. All three are interfaces so the
-// composition root wires concretes and tests wire fakes.
+// composition root wires concretes and tests wire fakes. Bus is the event bus
+// the engine publishes patch.applied to (patch may import event, File 15
+// §15.15.2); nil Bus skips publishing (the composition root always wires one).
 type Deps struct {
 	FS         Filesystem
 	Checkpoint Checkpointer
 	Validator  *Validator
+	Bus        *event.Bus
 }
 
 // Engine applies patches with checkpoint + rollback (File 10 §10.6).
@@ -69,11 +74,12 @@ type Engine struct {
 	fs         Filesystem
 	checkpoint Checkpointer
 	validator  *Validator
+	bus        *event.Bus
 }
 
 // NewEngine returns an Engine wired to its deps.
 func NewEngine(d Deps) *Engine {
-	return &Engine{fs: d.FS, checkpoint: d.Checkpoint, validator: d.Validator}
+	return &Engine{fs: d.FS, checkpoint: d.Checkpoint, validator: d.Validator, bus: d.Bus}
 }
 
 // Op is one apply request (File 10 §10.6). For an existing file, Blocks apply
@@ -91,13 +97,15 @@ type Op struct {
 // Result reports the outcome (File 10 §10.6). Exactly one of Accepted/Rejected
 // is set; Reason carries the cause on reject (the model reads it and retries,
 // §10.5.4); Checkpoint + Snapshot let the runtime Restore and the event name
-// the snapshot.
+// the snapshot; Summary is the diff stats (set on accept) for the runtime and
+// the patch.applied event.
 type Result struct {
 	Accepted   bool
 	Rejected   bool
 	Reason     string
 	Checkpoint string // human-readable id ("patch_3"), for Restore + the event
 	Snapshot   SnapshotRef
+	Summary    Summary
 }
 
 // Apply runs the engine's single application path (File 10 §10.6):
@@ -172,6 +180,37 @@ func (e *Engine) Apply(ctx context.Context, op Op) (Result, error) {
 		return Result{}, fmt.Errorf("patch: write %s: %w (rolled back to %s)", op.Path, werr, name)
 	}
 
+	// Success: summarize the diff and publish patch.applied (File 10 §10.6 +
+	// File 05 §5.4.4) so the transcript shows what changed. The summary is
+	// computed from original→next (a new file: original ""). Publish errors
+	// don't fail the apply — the write already succeeded; a dropped event is
+	// survivable, a rolled-back success would corrupt the tree.
 	res.Accepted = true
+	res.Summary = Summarize([]Change{{Path: op.Path, Original: original, Next: next}})
+	if e.bus != nil {
+		_ = e.bus.Publish(ctx, &event.PatchAppliedEvent{
+			Task:       event.TaskID(op.Task),
+			Snapshot:   []byte(fmt.Sprintf("%q", string(snap))),
+			Files:      toEventFiles(res.Summary.Files),
+			Insertions: res.Summary.Insertions,
+			Deletions:  res.Summary.Deletions,
+		})
+	}
 	return res, nil
+}
+
+// toEventFiles copies the patch-internal FileStat slice into the event's
+// PatchFile slice (the two mirror each other; patch keeps its own copy so the
+// engine summary doesn't depend on the event package's shape).
+func toEventFiles(fs []FileStat) []event.PatchFile {
+	out := make([]event.PatchFile, len(fs))
+	for i, f := range fs {
+		out[i] = event.PatchFile{
+			Path:       f.Path,
+			Insertions: f.Insertions,
+			Deletions:  f.Deletions,
+			New:        f.New,
+		}
+	}
+	return out
 }
