@@ -45,6 +45,8 @@ type taskHandle struct {
 	task      *session.Task
 	pkg       ContextPackage
 	lastObs   Observation
+	ctx       context.Context    // task-scoped; cancel cascades into drive + ports
+	cancel    context.CancelFunc // attached to the Session Manager
 }
 
 // New wires a Core from Deps, filling absent ports with no-op stubs so the
@@ -67,7 +69,14 @@ func New(d Deps) *Core {
 
 // Submit opens a session task and starts driving it. Sprint 1 drives inline
 // (single task); the scheduler (File 04 §4.4) is added later.
+//
+// The task runs under a child context derived from ctx: canceling ctx (or the
+// child) cascades into the drive loop and every port call (L2-004). The child's
+// CancelFunc is attached to the Session Manager so its Cancel (user cancel,
+// File 04 §4.5) can cascade too.
 func (c *Core) Submit(ctx context.Context, sid session.ID, goal string) (session.TaskID, error) {
+	// StartTask uses the parent ctx so a not-yet-canceled task always allocates;
+	// the task's own context (below) governs the drive loop + ports.
 	tid, err := c.session.StartTask(ctx, sid, goal)
 	if err != nil {
 		return "", err
@@ -77,16 +86,22 @@ func (c *Core) Submit(ctx context.Context, sid session.ID, goal string) (session
 		return "", err
 	}
 	task := c.session.LoadTaskPublic(tid)
+
+	taskCtx, taskCancel := context.WithCancel(ctx)
+	c.session.AttachCancel(tid, taskCancel)
+
 	h := &taskHandle{
 		id:        tid,
 		sessionID: sid,
 		fsm:       newFSM(StateInit),
 		task:      task,
+		ctx:       taskCtx,
+		cancel:    taskCancel,
 	}
 	c.mu.Lock()
 	c.tasks[tid] = h
 	c.mu.Unlock()
-	c.drive(ctx, h, sess)
+	c.drive(taskCtx, h, sess)
 	return tid, nil
 }
 
@@ -98,7 +113,7 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 	for {
 		// Cancellation: a canceled context unwinds the loop (File 04 §4.5).
 		if err := ctx.Err(); err != nil {
-			c.handleCancel(ctx, h)
+			c.handleCancel(h)
 			return
 		}
 
@@ -136,6 +151,12 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			prompt := c.prompt.Compile(h.pkg)
 			turn, err := c.cog.Think(ctx, prompt)
 			if err != nil {
+				// A cancel that reached the cognitive core surfaces as
+				// ctx.Err(); treat it as cancellation, not a hard error.
+				if ctx.Err() != nil {
+					c.handleCancel(h)
+					return
+				}
 				c.toError(ctx, h, err)
 				return
 			}
@@ -205,8 +226,10 @@ func (c *Core) toError(ctx context.Context, h *taskHandle, cause error) {
 
 // handleCancel transitions the active task to CANCELLED (T18) via the Session
 // Manager, which cascades the cancel and rolls back the checkpoint (File 04
-// §4.5.3). Called when the drive context is canceled.
-func (c *Core) handleCancel(ctx context.Context, h *taskHandle) {
+// §4.5.3). Called when the drive context is canceled. It uses a fresh
+// background context so the cancel cleanup itself is not canceled.
+func (c *Core) handleCancel(h *taskHandle) {
+	ctx := context.Background()
 	_ = c.session.Cancel(ctx, h.id, "context_canceled")
 }
 
