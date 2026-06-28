@@ -83,8 +83,14 @@ type ReflectionDecision struct {
 	Note   string
 }
 
-// PatchOp is a patch the engine applies (File 10).
+// PatchOp is a patch the engine applies (File 10). Task + Seq name the
+// checkpoint and let the patch engine publish a causal snapshot; Path is the
+// optional target file carried by the tool-call args when the body is raw
+// SEARCH/REPLACE blocks.
 type PatchOp struct {
+	Task session.TaskID
+	Seq  int
+	Path string
 	Body []byte
 }
 

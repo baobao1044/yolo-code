@@ -320,7 +320,10 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 				_ = c.session.Cancel(ctx, h.id, "verify retry cap reached")
 				return
 			}
-			res, err := c.patch.Apply(ctx, patchOpFromCall(h.pending[0]))
+			op := patchOpFromCall(h.pending[0])
+			op.Task = h.id
+			op.Seq = h.retries
+			res, err := c.patch.Apply(ctx, op)
 			if err != nil {
 				c.toError(ctx, h, err)
 				return
@@ -432,12 +435,14 @@ const maxVerifyRetries = 3
 // applies via the Patcher. Kept as "patch" so the composition root's adapter
 // routes it to the patch engine.
 func patchToolCall(p PatchOp) ToolCall {
-	return ToolCall{Tool: "patch", Args: p.Body, Reason: "corrective patch"}
+	return ToolCall{Tool: "patch", Args: p.Body, Task: event.TaskID(p.Task), Reason: "corrective patch"}
 }
 
 // patchOpFromCall unpacks a patch tool call back into a PatchOp for the Patcher.
+// It preserves the task ID threaded through the tool call; Path/Seq stay
+// defaults because JSON args don't carry them — the PATCH arm re-injects them.
 func patchOpFromCall(call ToolCall) PatchOp {
-	return PatchOp{Body: call.Args}
+	return PatchOp{Body: call.Args, Task: session.TaskID(call.Task)}
 }
 
 // filesFromSnapshot is a placeholder: a real patch returns the touched paths in
