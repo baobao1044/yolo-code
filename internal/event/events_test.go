@@ -22,7 +22,7 @@ func sampleEvents() map[Topic]Event {
 		"task.undone":          &UndoneEvent{Task: "t_01", Entry: json.RawMessage(`{"i":1}`)},
 		"state.change":         &StateChangeEvent{Task: t, From: "PLAN", To: "EXECUTE", Why: "plan-ready"},
 		"context.built":        &ContextBuiltEvent{Task: t},
-		"approval.request":     &ApprovalRequestEvent{Task: t, Tool: "shell", Summary: "rm -rf x", Preview: "...", Risk: "high"},
+		"approval.request":     &ApprovalRequestEvent{Task: t, ApprovalID: "a_1", Tool: "shell", Summary: "rm -rf x", Preview: "...", Risk: "high"},
 		"observation.received": &ObservationEvent{Task: t, Tool: "read_file", Obs: json.RawMessage(`{"lines":12}`)},
 		"verification.failed":  &VerificationFailedEvent{Task: t, Reason: "test failed"},
 		"reflection.note":      &ReflectionEvent{Task: t, Note: "reconsider approach"},

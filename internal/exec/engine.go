@@ -16,11 +16,34 @@ package exec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yolo-code/yolo/internal/event"
 )
+
+// ErrRejected is returned when a HITL approval is denied (File 08 §8.5.2). It
+// is a normal error so the dispatcher surfaces it to the model as a tool
+// result, not a crash; the model is instructed to treat rejection as feedback.
+var ErrRejected = errors.New("exec: tool call rejected by user")
+
+// approvalDecision is the verdict ResolveApproval sends down the pending
+// channel: approved=true runs the tool, false returns ErrRejected.
+type approvalDecision struct {
+	approved bool
+}
+
+// approvalGate records the per-call decision channel so the dispatcher blocks
+// until ResolveApproval(id, …) feeds it. A sync.Map keeps the pending set safe
+// for the TUI's goroutine to resolve while Dispatch waits (single Dispatch
+// goroutine, single resolver).
+type approvalGate struct {
+	pending sync.Map // approvalID -> chan approvalDecision
+	counter atomic.Uint64
+}
 
 // ToolAdmitter is the tool-policy seam (File 08 §8.3.2 `toolPolicy.Allow`).
 // exec may not import cognitive (import matrix), so the gate is an interface
@@ -60,6 +83,7 @@ type Engine struct {
 	admitter   ToolAdmitter
 	normalizer Normalizer
 	sandbox    *Sandbox
+	approval   approvalGate
 	config     Config
 }
 
@@ -113,7 +137,19 @@ func (e *Engine) Dispatch(ctx context.Context, call ToolCall) (Observation, erro
 	if err := e.allowNetwork(tool, call); err != nil {
 		return obsErr(call), err
 	}
-	// L7-006 inserts the HITL approval gate here (risk >= medium && !autoApprove).
+	// L7-006 HITL approval gate (File 08 §8.5.2): a medium/high-risk call
+	// blocks until the user resolves the approval; a critical-risk call is
+	// denied outright (never prompts). Low risk runs silently. AutoApprove
+	// (Config) skips the prompt for allowlisted risk classes.
+	risk := tool.Risk(call)
+	if risk == RiskCritical {
+		return obsErr(call), fmt.Errorf("tool %q denied: critical risk (explicitly denied)", call.Tool)
+	}
+	if riskLevel(risk) >= riskLevel(RiskMedium) && !e.config.AutoApprove[risk] {
+		if err := e.requestApproval(ctx, call, risk, tool); err != nil {
+			return obsErr(call), err
+		}
+	}
 
 	out, err := e.runWithTimeout(ctx, tool, call)
 	if err != nil {
@@ -128,7 +164,76 @@ func (e *Engine) Dispatch(ctx context.Context, call ToolCall) (Observation, erro
 
 // NeedsApproval reports whether a call would block on the HITL gate (File 08
 // §8.3.2). Wired in L7-006; L7-003 returns false (no approval yet).
-func (e *Engine) NeedsApproval(_ ToolCall) bool { return false }
+// NeedsApproval reports whether a call would block on the HITL gate (File 08
+// §8.3.2 / §8.5.2): a medium/high-risk tool whose risk class is not in
+// Config.AutoApprove. Critical-risk tools don't "need approval" — they're
+// denied outright; the runtime asks NeedsApproval to decide whether to show a
+// prompt, and a critical tool gets a denial result, not a prompt.
+func (e *Engine) NeedsApproval(call ToolCall) bool {
+	tool, ok := e.registry.Get(call.Tool)
+	if !ok {
+		return false
+	}
+	risk := tool.Risk(call)
+	if risk == RiskCritical {
+		return false
+	}
+	if riskLevel(risk) < riskLevel(RiskMedium) {
+		return false
+	}
+	return !e.config.AutoApprove[risk]
+}
+
+// requestApproval publishes an ApprovalRequestEvent and blocks until the user
+// resolves it or the context is cancelled (File 08 §8.5.2). The ApprovalID in
+// the event is what the TUI echoes back via ResolveApproval; a monotonic
+// counter keeps ids unique. On approval it returns nil; on rejection it
+// returns ErrRejected; on ctx cancel it returns the ctx error.
+func (e *Engine) requestApproval(ctx context.Context, call ToolCall, risk event.Risk, tool Tool) error {
+	id := fmt.Sprintf("appr-%d", e.approval.counter.Add(1))
+	ch := make(chan approvalDecision, 1)
+	e.approval.pending.Store(id, ch)
+	defer e.approval.pending.Delete(id)
+
+	meta := tool.Metadata()
+	if e.bus != nil {
+		_ = e.bus.Publish(ctx, &event.ApprovalRequestEvent{
+			Task:       call.Task,
+			ApprovalID: id,
+			Tool:       call.Tool,
+			Summary:    call.Reason,
+			Preview:    meta.Description,
+			Risk:       risk,
+		})
+	}
+
+	select {
+	case dec := <-ch:
+		if !dec.approved {
+			return ErrRejected
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ResolveApproval feeds the user's decision to a blocked Dispatch (File 08
+// §8.5.2). The runtime/TUI calls this when it receives a UserApproveEvent /
+// UserRejectEvent carrying the same ApprovalID. An unknown id is a no-op (the
+// call may have been cancelled already; the pending entry was deleted).
+func (e *Engine) ResolveApproval(id string, approved bool) {
+	v, ok := e.approval.pending.LoadAndDelete(id)
+	if !ok {
+		return
+	}
+	ch := v.(chan approvalDecision)
+	select {
+	case ch <- approvalDecision{approved: approved}:
+	default:
+		// channel already drained/closed; the call already gave up.
+	}
+}
 
 // runWithTimeout runs the tool in a goroutine under a per-call timeout. If
 // Config.ToolTimeout is set, a child context is cancelled when it elapses;

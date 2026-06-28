@@ -98,11 +98,12 @@ func (e *ContextBuiltEvent) Type() Topic      { return "context.built" }
 func (e *ContextBuiltEvent) CausalID() TaskID { return e.Task }
 
 type ApprovalRequestEvent struct {
-	Task    TaskID `json:"task"`
-	Tool    string `json:"tool"`
-	Summary string `json:"summary"`
-	Preview string `json:"preview"`
-	Risk    Risk   `json:"risk"`
+	Task       TaskID `json:"task"`
+	ApprovalID string `json:"approval_id"`
+	Tool       string `json:"tool"`
+	Summary    string `json:"summary"`
+	Preview    string `json:"preview"`
+	Risk       Risk   `json:"risk"`
 }
 
 func (e *ApprovalRequestEvent) Type() Topic      { return "approval.request" }

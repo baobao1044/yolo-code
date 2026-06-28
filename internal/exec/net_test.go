@@ -17,7 +17,9 @@ import (
 
 // netTool is a fake tool that declares Net:true and records whether its Run
 // was reached. It never actually connects (the policy must block before Run
-// for the deny case; the allow case just asserts Run was reached).
+// for the deny case; the allow case just asserts Run was reached). Risk is low
+// so the network gate — not the HITL gate (L7-006) — is what the tests
+// exercise; the two gates are independent concerns.
 type netTool struct {
 	name string
 	host string
@@ -27,7 +29,7 @@ type netTool struct {
 func (t *netTool) Name() string               { return t.name }
 func (t *netTool) Metadata() Metadata         { return Metadata{Permission: Permission{Net: true}} }
 func (t *netTool) Schema() Schema             { return Schema{Type: "object"} }
-func (t *netTool) Risk(_ ToolCall) event.Risk { return RiskHigh }
+func (t *netTool) Risk(_ ToolCall) event.Risk { return RiskLow }
 func (t *netTool) Run(_ context.Context, _ ToolInput) (ToolOutput, error) {
 	t.ran = true
 	return ToolOutput{Stdout: "connected to " + t.host}, nil
