@@ -30,9 +30,20 @@ type chunkVec struct {
 	vector []float32
 }
 
+// FS reads a file's content for reindexing (L10-004). The composition root
+// wires the sandbox-confined reader; memory stays free of infra (the import
+// matrix lets memory import only event + stdlib). Mirrors verify/patch's FS
+// seam.
+type FS interface {
+	Read(ctx context.Context, path string) ([]byte, error)
+}
+
 // SemanticStore holds the embedded chunks and retrieves the top-k by cosine.
+// fs is the reindex reader (set by NewSemanticStoreWithFS); nil means Reindex
+// can't read a path's content (it's a no-op unless content is passed directly).
 type SemanticStore struct {
 	embed  Embedder
+	fs     FS
 	mu     sync.RWMutex
 	chunks []chunkVec
 	nextID int
@@ -46,6 +57,12 @@ func NewSemanticStore() *SemanticStore { return &SemanticStore{} }
 // NewSemanticStoreWith returns a store backed by the given embedder.
 func NewSemanticStoreWith(emb Embedder) *SemanticStore {
 	return &SemanticStore{embed: emb}
+}
+
+// NewSemanticStoreWithFS returns a store backed by the given embedder + an FS
+// reader so Reindex can read a path's content on patch.applied (L10-004).
+func NewSemanticStoreWithFS(emb Embedder, fs FS) *SemanticStore {
+	return &SemanticStore{embed: emb, fs: fs}
 }
 
 // addChunk embeds + appends a chunk. Test-visible (the L10-003 exit-bar test
@@ -121,22 +138,52 @@ func (s *SemanticStore) Retrieve(ctx context.Context, query string, budget int) 
 	return out
 }
 
-// Reindex replaces a path's chunks (§11.7.5 — atomic). Deletes the path's
-// existing chunks and (in L10-004) inserts the new ones from the freshly-chunked
-// content. L10-003 ships the delete + a single-chunk re-embed so the listener's
-// patch.applied handler doesn't crash; L10-004 wires ChunkFile → embed → insert.
-func (s *SemanticStore) Reindex(_ context.Context, path string, content []byte) {
+// Reindex replaces a path's chunks atomically (§11.7.5): chunk the new content,
+// embed each chunk, then in one locked pass drop the path's old chunks and
+// insert the new ones (a retrieval sees old or new, never a mix). Content comes
+// from the `content` arg if non-nil; otherwise the store's FS reads the path
+// (the listener passes nil + relies on the FS). A nil content with no FS, or a
+// read failure, leaves the path de-indexed (its old chunks dropped) — a missing
+// file has nothing to index.
+func (s *SemanticStore) Reindex(ctx context.Context, path string, content []byte) {
+	// Resolve content: explicit arg, else read via FS.
+	if content == nil && s.fs != nil {
+		var err error
+		content, err = s.fs.Read(ctx, path)
+		if err != nil {
+			content = nil // read failed → nothing to index
+		}
+	}
+
+	// Chunk + embed OUTSIDE the lock (I/O + CPU work; no shared state touched).
+	chunks := ChunkFile(path, content)
+	var newVecs []chunkVec
+	if s.embed == nil {
+		s.embed = NewHashEmbedder(256)
+	}
+	for _, c := range chunks {
+		vecs, _ := s.embed.Embed(ctx, []string{c.Text})
+		cv := chunkVec{path: c.Path, kind: c.Kind, name: c.Name, text: c.Text}
+		if len(vecs) > 0 {
+			cv.vector = vecs[0]
+		}
+		newVecs = append(newVecs, cv)
+	}
+
+	// Atomic replace: one locked pass drops the path's old chunks and inserts
+	// the new ones. A retrieval before this point sees old; after, sees new.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Atomic replace: drop the path's chunks in one pass.
 	kept := s.chunks[:0]
 	for _, c := range s.chunks {
 		if c.path != path {
 			kept = append(kept, c)
 		}
 	}
+	for _, cv := range newVecs {
+		s.nextID++
+		cv.id = s.nextID
+		kept = append(kept, cv)
+	}
 	s.chunks = kept
-	// L10-004 re-chunks + re-embeds `content` here; L10-003 leaves the new
-	// chunks to the chunker ticket. No-op on nil content.
-	_ = content
 }
