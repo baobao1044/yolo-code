@@ -99,7 +99,7 @@ func (r *runtimeAgentRunner) runReviewer(ctx context.Context, task event.TaskAss
 		return err
 	}
 	path := firstArtifact(task.Artifacts, task.Brief)
-	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "read", Args: []byte(`{"path":"` + path + `"}`)})
+	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "read_file", Args: []byte(`{"file":"` + path + `"}`)})
 	// Approve if the artifact reads with content, or if there is no artifact
 	// to audit (e.g. legacy tests with plain titles and no file extension).
 	approved := err != nil || len(obs.Stdout) > 10
@@ -114,7 +114,7 @@ func (r *runtimeAgentRunner) runTester(ctx context.Context, task event.TaskAssig
 	if err != nil {
 		return err
 	}
-	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "bash", Args: []byte(`{"cmd":"go version"}`)})
+	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "bash", Args: []byte(`{"command":"go version"}`)})
 	passed := err == nil && strings.Contains(obs.Stdout, "go") && !strings.Contains(obs.Stdout, "error")
 	output := obs.Stdout
 	if !passed && obs.Stdout == "" {
@@ -216,10 +216,13 @@ func firstArtifact(artifacts []string, brief string) string {
 
 // patchToolProvider is a scripted cognitive provider that emits a single
 // patch tool call. It is used by the test harness to drive deterministic coder
-// agents without an external LLM.
+// agents without an external LLM. After emitting the patch once, subsequent
+// Think calls return a final answer so the FSM terminates (otherwise HasMore
+// keeps returning true and the drive loop spins forever).
 type patchToolProvider struct {
-	path string
-	body string
+	path    string
+	body    string
+	emitted bool // true after the first Think call emits the patch
 }
 
 func (p *patchToolProvider) Window() int { return 128_000 }
@@ -236,6 +239,8 @@ func (p *patchToolProvider) Stream(ctx context.Context, req cognitive.Request) (
 	out := make(chan cognitive.Chunk, 1)
 	go func() {
 		defer close(out)
+
+		// Reflection: abort on verify failure (takes priority).
 		if strings.Contains(joined, "Reflect on the failed verification") {
 			select {
 			case out <- cognitive.Chunk{Delta: "DECISION: abort"}:
@@ -244,6 +249,18 @@ func (p *patchToolProvider) Stream(ctx context.Context, req cognitive.Request) (
 			return
 		}
 
+		// Subsequent Think calls after the patch was already emitted: return a
+		// final answer so the FSM reaches DONE instead of looping forever.
+		if p.emitted {
+			select {
+			case out <- cognitive.Chunk{Delta: "The task is complete."}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		// First Think call: emit the patch tool block.
+		p.emitted = true
 		pa := patchToolArgs{Path: p.path, Body: p.body}
 		raw, err := json.Marshal(pa)
 		if err != nil {

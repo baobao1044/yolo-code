@@ -196,7 +196,8 @@ func (s *lintStage) Run(ctx context.Context, files []string) StageResult {
 	if !hasToolFor(files, StageLint) {
 		return skipNoTool(StageLint)
 	}
-	_, stderr, exit, err := s.runner.Run(ctx, "go", append([]string{"vet"}, files...)...)
+	dirs := dirOf(files)
+	_, stderr, exit, err := s.runner.Run(ctx, "go", append([]string{"vet"}, dirs...)...)
 	if err != nil {
 		return StageResult{Stage: StageLint, Status: SevFail, Detail: "go vet: " + err.Error()}
 	}
