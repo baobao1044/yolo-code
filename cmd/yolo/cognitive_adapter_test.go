@@ -21,7 +21,7 @@ import (
 func TestCognitiveAdapterThinkBridgesToolCalls(t *testing.T) {
 	provider := cognitive.NewMockProvider([]cognitive.Chunk{
 		{Delta: "I'll use a tool.\n"},
-		{ToolCall: &cognitive.ToolCall{Tool: "bash", Args: []byte(`{"cmd":"go version"}`), Reason: "check go"}},
+		{ToolCall: &cognitive.ToolCall{Tool: "bash", Args: []byte(`{"command":"go version"}`), Reason: "check go"}},
 	}, 128_000)
 
 	adapter := &cognitiveAdapter{core: cognitive.New(provider, nil)}

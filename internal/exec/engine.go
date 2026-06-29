@@ -72,6 +72,7 @@ type Deps struct {
 	Admitter   ToolAdmitter
 	Normalizer Normalizer
 	Sandbox    *Sandbox
+	Config     Config
 }
 
 // Engine dispatches tool calls (File 08 §8.7). Fields are read-only after New
@@ -106,6 +107,7 @@ func New(d Deps) *Engine {
 		admitter:   d.Admitter,
 		normalizer: d.Normalizer,
 		sandbox:    d.Sandbox,
+		config:     d.Config,
 	}
 	if e.normalizer == nil {
 		e.normalizer = passthroughNormalizer{}

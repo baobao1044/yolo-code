@@ -7,6 +7,11 @@
 //	YOLO_BASE_URL — API base URL (default: https://api.openai.com/v1)
 //	YOLO_MODEL    — model ID (default: gpt-4o)
 //	YLOLO_WINDOW  — context window size (default: 128000)
+//
+// When the request carries tool names (Request.Tools), the provider includes
+// OpenAI-native function/tool definitions in the chat completions request so
+// models that support structured tool calling (e.g. Kimi K2.7) emit
+// delta.tool_calls instead of inline tool tokens.
 
 package cognitive
 
@@ -102,6 +107,13 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (<-chan 
 		Stream:   true,
 	}
 
+	// When the request carries tool names, include OpenAI-native tool
+	// definitions so models with structured tool calling emit delta.tool_calls
+	// instead of inline tool tokens.
+	if len(req.Tools) > 0 {
+		body.Tools = buildToolDefs(req.Tools)
+	}
+
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -139,9 +151,46 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (<-chan 
 // parseSSE reads the SSE stream and emits Chunks. The OpenAI streaming
 // format sends `data: {json}\n\n` lines, with `data: [DONE]` as the
 // terminal signal.
+//
+// Tool calls arrive as indexed delta fragments: each chunk carries
+// delta.tool_calls[i].function.name and/or .arguments, and the same index
+// may appear across multiple SSE events (name first, then argument deltas).
+// We accumulate them in a map keyed by index and emit a Chunk.ToolCall
+// each time a complete call is available (when the finish_reason is
+// "tool_calls" or [DONE] arrives).
 func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out chan<- Chunk) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MB max line
+
+	// Accumulate partial tool calls by index across SSE chunks.
+	type partialCall struct {
+		Name      strings.Builder
+		Arguments strings.Builder
+	}
+	partials := make(map[int]*partialCall)
+
+	// flushToolCalls emits all accumulated tool calls as Chunks.
+	flushToolCalls := func() {
+		for idx, pc := range partials {
+			name := pc.Name.String()
+			args := pc.Arguments.String()
+			if name != "" {
+				chunk := Chunk{
+					ToolCall: &ToolCall{
+						Tool:   name,
+						Args:   []byte(args),
+						Reason: "",
+					},
+				}
+				select {
+				case out <- chunk:
+				case <-ctx.Done():
+					return
+				}
+			}
+			delete(partials, idx)
+		}
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -153,8 +202,9 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 
 		data := strings.TrimPrefix(line, "data: ")
 
-		// Terminal signal.
+		// Terminal signal — flush any remaining tool calls.
 		if data == "[DONE]" {
+			flushToolCalls()
 			return
 		}
 
@@ -168,7 +218,8 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 			continue
 		}
 
-		delta := ev.Choices[0].Delta
+		choice := ev.Choices[0]
+		delta := choice.Delta
 		var chunk Chunk
 
 		// Reasoning/thinking content (some providers use reasoning_content).
@@ -181,21 +232,29 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 			chunk.Delta = delta.Content
 		}
 
-		// Tool calls.
+		// Tool calls: accumulate by index, flush on finish.
 		if len(delta.ToolCalls) > 0 {
 			for _, tc := range delta.ToolCalls {
+				idx := tc.Index
+				if _, ok := partials[idx]; !ok {
+					partials[idx] = &partialCall{}
+				}
 				if tc.Function.Name != "" {
-					chunk.ToolCall = &ToolCall{
-						Tool:   tc.Function.Name,
-						Args:   []byte(tc.Function.Arguments),
-						Reason: "",
-					}
+					partials[idx].Name.WriteString(tc.Function.Name)
+				}
+				if tc.Function.Arguments != "" {
+					partials[idx].Arguments.WriteString(tc.Function.Arguments)
 				}
 			}
 		}
 
-		// Only emit non-empty chunks.
-		if chunk.Delta != "" || chunk.Thinking != "" || chunk.ToolCall != nil || chunk.Err != nil {
+		// If the model signals it's done with tool calls, flush them.
+		if choice.FinishReason == "tool_calls" || choice.FinishReason == "stop" {
+			flushToolCalls()
+		}
+
+		// Only emit non-empty text/thinking chunks (tool calls are emitted by flush).
+		if chunk.Delta != "" || chunk.Thinking != "" || chunk.Err != nil {
 			select {
 			case out <- chunk:
 			case <-ctx.Done():
@@ -203,6 +262,9 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 			}
 		}
 	}
+
+	// Flush any remaining tool calls if we exit the loop without [DONE].
+	flushToolCalls()
 
 	if err := scanner.Err(); err != nil {
 		select {
@@ -217,6 +279,7 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
+	Tools    []chatTool    `json:"tools,omitempty"`
 	Stream   bool          `json:"stream"`
 }
 
@@ -225,12 +288,26 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
+type chatTool struct {
+	Type     string       `json:"type"`
+	Function chatFunction `json:"function"`
+}
+
+type chatFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
 type chatStreamResponse struct {
 	Choices []struct {
-		Delta struct {
+		Index        int    `json:"index"`
+		FinishReason string `json:"finish_reason"`
+		Delta        struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
 			ToolCalls        []struct {
+				Index    int `json:"index"`
 				Function struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
@@ -238,6 +315,59 @@ type chatStreamResponse struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
+}
+
+// toolDefs is the registry of tool schemas the provider can send to the model.
+// Keys are the tool names used in Request.Tools; values are OpenAI-format
+// function definitions. This is the single source of truth for the tool schema
+// — the system prompt in engine.go describes the same tools in prose; this
+// table gives the model the structured schema it needs for native tool calling.
+var toolDefs = map[string]chatTool{
+	"list_files": {
+		Type: "function",
+		Function: chatFunction{
+			Name:        "list_files",
+			Description: "List files in the repository. Returns a list of relative file paths.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{},"required":[]}`),
+		},
+	},
+	"read_file": {
+		Type: "function",
+		Function: chatFunction{
+			Name:        "read_file",
+			Description: "Read a file's contents from the repository.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"file":{"type":"string","description":"relative path to the file"}},"required":["file"]}`),
+		},
+	},
+	"edit_file": {
+		Type: "function",
+		Function: chatFunction{
+			Name:        "edit_file",
+			Description: "Edit a file by replacing its entire contents. Always output the FULL file content, never partial diffs.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"file":{"type":"string","description":"relative path to the file"},"content":{"type":"string","description":"the full new file content"}},"required":["file","content"]}`),
+		},
+	},
+	"bash": {
+		Type: "function",
+		Function: chatFunction{
+			Name:        "bash",
+			Description: "Run a shell command in the repository directory. Use for building, testing, running scripts, etc.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"the shell command to run"}},"required":["command"]}`),
+		},
+	},
+}
+
+// buildToolDefs converts a list of tool names to OpenAI-format tool definitions.
+// Unknown names are skipped silently so the request doesn't break if a tool
+// name has no schema yet.
+func buildToolDefs(names []string) []chatTool {
+	var tools []chatTool
+	for _, name := range names {
+		if def, ok := toolDefs[name]; ok {
+			tools = append(tools, def)
+		}
+	}
+	return tools
 }
 
 // Ensure OpenAICompatProvider satisfies the Provider interface at compile time.

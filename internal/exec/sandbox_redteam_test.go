@@ -95,7 +95,7 @@ func TestReadToolRejectsRedTeamEscape(t *testing.T) {
 	s := newSandbox(t)
 	read := NewRead(s)
 
-	if _, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"path":"../../etc/passwd"}`)}); err != ErrPathEscapes {
+	if _, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"file":"../../etc/passwd"}`)}); err != ErrPathEscapes {
 		t.Fatalf("Read escape = %v, want ErrPathEscapes", err)
 	}
 }

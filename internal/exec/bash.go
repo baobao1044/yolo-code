@@ -40,7 +40,7 @@ func (b *Bash) Metadata() Metadata {
 }
 
 func (b *Bash) Schema() Schema {
-	return Schema{Type: "object", Required: []string{"cmd"}}
+	return Schema{Type: "object", Required: []string{"command"}}
 }
 
 func (b *Bash) Risk(call ToolCall) event.Risk {
@@ -48,31 +48,31 @@ func (b *Bash) Risk(call ToolCall) event.Risk {
 	// parse, fall back to medium so the HITL gate prompts rather than running
 	// an unvetted command blind.
 	var args struct {
-		Cmd string `json:"cmd"`
+		Command string `json:"command"`
 	}
 	if json.Unmarshal(call.Args, &args) != nil {
 		return RiskMedium
 	}
-	return b.sandbox.Classify(args.Cmd)
+	return b.sandbox.Classify(args.Command)
 }
 
 func (b *Bash) Run(ctx context.Context, in ToolInput) (ToolOutput, error) {
 	var args struct {
-		Cmd string `json:"cmd"`
+		Command string `json:"command"`
 	}
 	if err := json.Unmarshal(in.Args, &args); err != nil {
 		return ToolOutput{}, fmt.Errorf("bash: invalid args: %w", err)
 	}
 
-	risk := b.sandbox.Classify(args.Cmd)
+	risk := b.sandbox.Classify(args.Command)
 	if risk == RiskCritical {
 		// Critical commands are explicitly denied (File 08 §8.5.1) — never
 		// spawn them. The dispatcher's HITL gate would deny them anyway, but
 		// Bash refuses directly so a direct Run (outside Dispatch) is safe too.
-		return ToolOutput{ExitCode: -1}, fmt.Errorf("bash: command denied (critical risk): %s", args.Cmd)
+		return ToolOutput{ExitCode: -1}, fmt.Errorf("bash: command denied (critical risk): %s", args.Command)
 	}
 
-	name, shellArgs := shellInvocation(args.Cmd)
+	name, shellArgs := shellInvocation(args.Command)
 	cmd := exec.CommandContext(ctx, name, shellArgs...)
 	if b.sandbox != nil {
 		cmd.Dir = b.sandbox.cwd

@@ -169,7 +169,19 @@ func (r *runtimeAgentRunner) buildAdapters() (*execAdapter, *verifyAdapter, *pat
 	reg := new(exec.Registry)
 	reg.Register(exec.NewBash(sandbox))
 	reg.Register(exec.NewRead(sandbox))
-	execEng := exec.New(exec.Deps{Registry: reg, Sandbox: sandbox, Bus: r.bus})
+	reg.Register(exec.NewListFiles(sandbox))
+		reg.Register(exec.NewEditFile(sandbox))
+		execEng := exec.New(exec.Deps{
+			Registry: reg,
+			Sandbox:  sandbox,
+			Bus:      r.bus,
+			Config: exec.Config{
+				AutoApprove: map[event.Risk]bool{
+					exec.RiskMedium: true,
+					exec.RiskHigh:   true,
+				},
+			},
+		})
 
 	snap, err := newShadowSnap(r.repo)
 	if err != nil {

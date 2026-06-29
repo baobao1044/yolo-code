@@ -36,7 +36,9 @@ func (a *execAdapter) Dispatch(ctx context.Context, call runtime.ToolCall) (runt
 	if err != nil {
 		return runtime.Observation{}, err
 	}
-	return execToRuntimeObs(obs), nil
+	robs := execToRuntimeObs(obs)
+	robs.Tool = call.Tool
+	return robs, nil
 }
 
 // dispatchPatch parses the JSON tool args {"path":..., "body":...} and applies

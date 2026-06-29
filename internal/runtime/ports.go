@@ -38,7 +38,8 @@ type ToolCall struct {
 // Observation is a tool's result (File 08). Opaque payload; Files lists the
 // paths the tool/patch touched so VERIFY knows what to check; Checkpoint is the
 // checkpoint name a patch tool recorded, the runtime Restores on a verify
-// failure.
+// failure. Tool carries the tool name so the runtime can feed results back
+// to the cognitive core for multi-turn agent loops.
 type Observation struct {
 	FromPatch  bool
 	Payload    []byte // json.RawMessage
@@ -46,6 +47,7 @@ type Observation struct {
 	Checkpoint string // set by a patch tool; the runtime rolls back here on fail
 	Stdout     string
 	Summary    string
+	Tool       string // the tool name that produced this observation
 }
 
 // VerifyPolicy is the runtime's opaque view of cognitive.VerificationPolicy
@@ -131,11 +133,13 @@ type CognitiveTurn struct {
 // CognitiveCore drives planning, reflection, and tool selection (File 07).
 // Think is the Planner turn; HasMore decides VERIFY→PLAN vs VERIFY→DONE; Reflect
 // is the verify-failure handoff (File 07 §7.3) — the runtime calls it when a
-// Verdict fails and acts on the Replan/Patch/Abort decision.
+// Verdict fails and acts on the Replan/Patch/Abort decision. RecordToolResult
+// feeds a tool's output back into the conversation so the next Think sees it.
 type CognitiveCore interface {
 	Think(ctx context.Context, msgs Prompt) (CognitiveTurn, error)
 	HasMore(task *session.Task) bool
 	Reflect(ctx context.Context, task *session.Task, v Verdict, obs Observation) ReflectionDecision
+	RecordToolResult(toolName, result string)
 }
 
 // Executor dispatches tools under the sandbox (File 08).

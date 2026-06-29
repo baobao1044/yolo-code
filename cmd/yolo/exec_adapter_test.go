@@ -22,7 +22,7 @@ func TestExecAdapterDispatchesBash(t *testing.T) {
 
 	obs, err := adapter.Dispatch(context.Background(), runtime.ToolCall{
 		Tool: "bash",
-		Args: []byte(`{"cmd":"go version"}`),
+		Args: []byte(`{"command":"go version"}`),
 	})
 	if err != nil {
 		t.Fatalf("Dispatch(bash) = %v, want nil", err)

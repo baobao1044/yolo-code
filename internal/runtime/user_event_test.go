@@ -24,7 +24,7 @@ func (t *toolCognitive) Think(_ context.Context, _ Prompt) (CognitiveTurn, error
 		return CognitiveTurn{
 			Final: false,
 			ToolCalls: []ToolCall{
-				{Tool: "bash", Args: []byte(`{"cmd":"echo hi"}`)},
+				{Tool: "bash", Args: []byte(`{"command":"echo hi"}`)},
 			},
 		}, nil
 	}
@@ -35,6 +35,7 @@ func (*toolCognitive) HasMore(*session.Task) bool { return false }
 func (*toolCognitive) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
 	return ReflectionDecision{Abort: true, Note: "stub reflect"}
 }
+func (*toolCognitive) RecordToolResult(string, string) {}
 
 // approvalExecutor returns NeedsApproval=true so every tool call pauses in
 // WAIT_USER.

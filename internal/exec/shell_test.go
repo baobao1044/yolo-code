@@ -33,7 +33,7 @@ func newBash(t *testing.T) *Bash {
 func TestBashAllowlistedCommandRuns(t *testing.T) {
 	bash := newBash(t)
 
-	out, err := bash.Run(context.Background(), ToolInput{Args: []byte(`{"cmd":"echo hi"}`)})
+	out, err := bash.Run(context.Background(), ToolInput{Args: []byte(`{"command":"echo hi"}`)})
 	if err != nil {
 		t.Fatalf("Bash(echo hi) = %v, want nil", err)
 	}
@@ -47,7 +47,7 @@ func TestBashDeniesCriticalCommand(t *testing.T) {
 
 	// rm -rf / is classified critical (File 08 §8.4.3); Bash must refuse to
 	// even spawn it (critical is explicitly denied, §8.5.1).
-	_, err := bash.Run(context.Background(), ToolInput{Args: []byte(`{"cmd":"rm -rf /"}`)})
+	_, err := bash.Run(context.Background(), ToolInput{Args: []byte(`{"command":"rm -rf /"}`)})
 	if err == nil {
 		t.Fatal("Bash(rm -rf /) = nil, want deny error (critical command refused)")
 	}
@@ -63,7 +63,7 @@ func TestCancelKillsParent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := bash.Run(ctx, ToolInput{Args: []byte(`{"cmd":"` + cmd + `"}`)})
+		_, err := bash.Run(ctx, ToolInput{Args: []byte(`{"command":"` + cmd + `"}`)})
 		done <- err
 	}()
 
@@ -95,7 +95,7 @@ func TestCancelKillsProcessGroup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := bash.Run(ctx, ToolInput{Args: []byte(`{"cmd":"` + spawn + `"}`)})
+		_, err := bash.Run(ctx, ToolInput{Args: []byte(`{"command":"` + spawn + `"}`)})
 		done <- err
 	}()
 

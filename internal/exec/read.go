@@ -24,7 +24,7 @@ type Read struct {
 	sandbox *Sandbox
 }
 
-func (r *Read) Name() string { return "read" }
+func (r *Read) Name() string { return "read_file" }
 
 func (r *Read) Metadata() Metadata {
 	return Metadata{
@@ -36,19 +36,19 @@ func (r *Read) Metadata() Metadata {
 }
 
 func (r *Read) Schema() Schema {
-	return Schema{Type: "object", Required: []string{"path"}}
+	return Schema{Type: "object", Required: []string{"file"}}
 }
 
 func (r *Read) Risk(_ ToolCall) event.Risk { return RiskLow }
 
 func (r *Read) Run(_ context.Context, in ToolInput) (ToolOutput, error) {
 	var args struct {
-		Path string `json:"path"`
+		File string `json:"file"`
 	}
 	if err := json.Unmarshal(in.Args, &args); err != nil {
 		return ToolOutput{}, err
 	}
-	full, err := r.sandbox.Resolve(args.Path)
+	full, err := r.sandbox.Resolve(args.File)
 	if err != nil {
 		return ToolOutput{}, err
 	}

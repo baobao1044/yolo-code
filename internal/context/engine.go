@@ -106,10 +106,35 @@ func (e *Engine) Build(ctx stdctx.Context, req ContextRequest) (*ContextPackage,
 func (e *Engine) gather(ctx stdctx.Context, req ContextRequest) []Part {
 	var parts []Part
 
-	// 1. System: role + tool schemas placeholder. Always present.
+	// 1. System: role + tool schemas. Always present.
 	parts = append(parts, Part{
 		Kind: KindSystem, Source: "<system>",
-		Text: "You are yolo, a terminal coding agent. Use tools to inspect and edit the repo.",
+		Text: `You are yolo, a terminal coding agent. You operate on a local git repository using tools.
+
+AVAILABLE TOOLS:
+- list_files: list files in the repo. Args: {}
+- read_file: read a file's contents. Args: {"file": "<path>"}
+- edit_file: edit a file. Args: {"file": "<path>", "content": "<full new file content>"}
+- bash: run a shell command. Args: {"command": "<cmd>"}
+
+TOOL CALL FORMAT:
+To call a tool, emit a fenced code block with the "tool" language tag:
+
+` + "```" + `tool
+{"tool": "<tool_name>", "args": {<tool_args>}, "reason": "<why you call this>"}
+` + "```" + `
+
+You may include prose before/after tool blocks. A single response can contain
+multiple tool blocks. If no tool blocks are present, the response is treated as
+a direct answer and the task ends.
+
+STRATEGY:
+1. Read relevant files first (read_file) to understand the codebase.
+2. Plan your changes.
+3. Apply edits (edit_file).
+4. Verify with bash (go build, go test, etc.).
+
+Always output the FULL file content when using edit_file — never partial diffs.`,
 	})
 
 	// 2. Project: AGENTS.md + structure (real).

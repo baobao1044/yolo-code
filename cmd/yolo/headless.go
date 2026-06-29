@@ -243,7 +243,19 @@ func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
 	reg := new(execpkg.Registry)
 	reg.Register(execpkg.NewBash(sandbox))
 	reg.Register(execpkg.NewRead(sandbox))
-	execEng := execpkg.New(execpkg.Deps{Registry: reg, Sandbox: sandbox, Bus: bus})
+	reg.Register(execpkg.NewListFiles(sandbox))
+	reg.Register(execpkg.NewEditFile(sandbox))
+	execEng := execpkg.New(execpkg.Deps{
+		Registry: reg,
+		Sandbox:  sandbox,
+		Bus:      bus,
+		Config: execpkg.Config{
+			AutoApprove: map[event.Risk]bool{
+				execpkg.RiskMedium: true,
+				execpkg.RiskHigh:   true,
+			},
+		},
+	})
 
 	snap, err := newShadowSnap(repo)
 	if err != nil {

@@ -142,7 +142,7 @@ func TestReadToolReadsFile(t *testing.T) {
 	s := newSandbox(t)
 	read := NewRead(s)
 
-	out, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"path":"inside.txt"}`)})
+	out, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"file":"inside.txt"}`)})
 	if err != nil {
 		t.Fatalf("Read(inside.txt) = %v, want nil", err)
 	}
@@ -155,7 +155,7 @@ func TestReadToolRejectsEscape(t *testing.T) {
 	s := newSandbox(t)
 	read := NewRead(s)
 
-	_, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"path":"../../etc/passwd"}`)})
+	_, err := read.Run(context.Background(), ToolInput{Args: []byte(`{"file":"../../etc/passwd"}`)})
 	if err == nil {
 		t.Fatal("Read(../../etc/passwd) = nil, want ErrPathEscapes")
 	}

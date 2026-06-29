@@ -39,6 +39,8 @@ func (s StubCognitive) Think(context.Context, Prompt) (CognitiveTurn, error) {
 
 func (StubCognitive) HasMore(*session.Task) bool { return false }
 
+func (StubCognitive) RecordToolResult(string, string) {}
+
 // Reflect on a StubCognitive aborts (the stub never takes the tool path, so a
 // verify failure here would be a wiring bug — abort surfaces it loudly rather
 // than spinning). Real cores (cmd/yolo) override this with the LLM reflection.

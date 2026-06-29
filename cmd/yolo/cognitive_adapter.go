@@ -34,6 +34,12 @@ func (a *cognitiveAdapter) HasMore(task *session.Task) bool {
 	return a.core.HasMore(task)
 }
 
+// RecordToolResult satisfies runtime.CognitiveCore. Feeds the tool's output
+// into the cognitive Core's conversation history so the next Think sees it.
+func (a *cognitiveAdapter) RecordToolResult(toolName, result string) {
+	a.core.RecordToolResult(toolName, result)
+}
+
 // Reflect satisfies runtime.CognitiveCore. It converts runtime verdict and
 // observation into cognitive shapes, then adapts the decision back.
 func (a *cognitiveAdapter) Reflect(ctx context.Context, task *session.Task, v runtime.Verdict, obs runtime.Observation) runtime.ReflectionDecision {
@@ -69,7 +75,10 @@ func cognitiveToRuntimeDecision(d cog.ReflectionDecision) runtime.ReflectionDeci
 }
 
 // newRealCognitiveCore builds a cognitive.Core with the supplied provider and
-// the shared bus.
+// the shared bus. The standard tool set is passed so the provider can include
+// native function/tool definitions in the API request (models like Kimi K2.7
+// use structured tool_calls when tools are provided).
 func newRealCognitiveCore(provider cog.Provider, bus *event.Bus) runtime.CognitiveCore {
-	return &cognitiveAdapter{core: cog.New(provider, bus)}
+	tools := []string{"list_files", "read_file", "edit_file", "bash"}
+	return &cognitiveAdapter{core: cog.New(provider, bus, tools...)}
 }

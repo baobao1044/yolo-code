@@ -41,6 +41,8 @@ func (*blockingCognitive) Reflect(context.Context, *session.Task, Verdict, Obser
 	return ReflectionDecision{Abort: true, Note: "blocking cognitive has no reflection"}
 }
 
+func (*blockingCognitive) RecordToolResult(string, string) {}
+
 // TestCancelMidThinkReturnsCancelled is the L2-004 headline: a task canceled
 // while the cognitive core is mid-Thinking unwinds to a terminal CANCELLED
 // state via the Session Manager, and the drive loop returns (does not spin or

@@ -1,25 +1,62 @@
-# yolo-code User Documentation
+# yolo-code — Tài liệu Người dùng
 
-`yolo-code` is a multi-agent terminal coding agent. It reads a task from stdin,
-drives a cognitive core through the tool stack, and either edits your repo or
-reports back what it found.
+`yolo-code` là multi-agent terminal coding agent bằng Go. Nó đọc task, điều khiển cognitive core qua tool stack, và hoặc sửa repo hoặc báo cáo kết quả.
 
-## Modes
+## Chế độ chạy
 
-- **Headless** (`yolo --headless`) — no TTY; emits one JSON line per event.
-  Useful for scripts, golden tests, and CI.
-- **Interactive** (`yolo`) — starts the TUI with the multi-agent board, cost
-  meter, diff viewer, and status bar.
+- **Headless** (`yolo --headless`) — không TTY; emit 1 JSON line per event. Phù hợp cho scripts, golden tests, CI.
+- **Interactive** (`yolo`) — khởi động TUI với multi-agent board, cost meter, diff viewer, và status bar.
 
-## Key files
+## Kiến trúc tổng quan
 
-- `README.md` — this overview.
-- `quickstart.md` — install and first run.
-- `commands.md` — flags, environment variables, and exit codes.
+```
+┌──────────── Người dùng ────────────────┐
+│  Headless (JSON)   │   TUI (terminal)   │
+└────────┬───────────┴──────────┬─────────┘
+         │                      │
+    ┌────▼──────────────────────▼────┐
+    │        Event Bus (L3)         │
+    └──┬─────┬──────┬──────┬───────┘
+       │     │      │      │
+  Session  Runtime  Context  Cognitive
+   (L1)     (L2)    (L4)     (L6)
+                    │         │
+                 Prompt    Execution
+                (L5) ──►  (L7) ──► Patch (L9)
+                                      │
+                                 Verify (L8)
+                                      │
+                                 Memory (L10)
+                                      │
+                            Multi-Agent (L11)
+```
 
-## Safety notes
+**Data flow**: User Task → Context Engine → Prompt Compiler → Cognitive Core → Tool Execution → Verification → Loop hoặc Done
 
-All filesystem writes and shell commands go through the `exec` sandbox. The
-sandbox denies path escapes, classifies network/disk/shell-escape commands as
-high/critical risk, and peels wrappers like `sudo` before deciding. See
-`docs/security/sandbox-redteam.md` for the current red-team checklist.
+**Quy tắc vàng**:
+- Mỗi layer chỉ phụ thuộc layer thấp hơn + Event Bus
+- TUI subscribe-only, không bao giờ chứa logic
+- Memory updates CHỈ qua events
+- Runtime FSM chạy trên 1 goroutine duy nhất
+
+Xem chi tiết tại [Architecture](architecture.md).
+
+## An toàn
+
+Tất cả filesystem writes và shell commands đều đi qua `exec` sandbox. Sandbox:
+- Từ chối path escapes (`../../etc/passwd` → `ErrPathEscapes`)
+- Phân loại network/disk/shell-escape commands là high/critical risk
+- Peel wrappers như `sudo` trước khi quyết định
+
+Xem `docs/security/sandbox-redteam.md` cho red-team checklist.
+
+## Tài liệu
+
+| File | Nội dung |
+|---|---|
+| [Quickstart](quickstart.md) | Cài đặt và chạy lần đầu |
+| [Commands & Flags](commands.md) | Flags, env vars, exit codes |
+| [Architecture](architecture.md) | Kiến trúc 12 layers |
+| [Configuration](configuration.md) | Cấu hình đầy đủ |
+| [Tools Reference](tools.md) | 4 tools, schema, risk, HITL |
+| [TUI Guide](tui-guide.md) | Hướng dẫn dùng TUI |
