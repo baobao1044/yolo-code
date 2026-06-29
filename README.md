@@ -8,7 +8,7 @@
 
 ## Features
 
-- **4 built-in tools**: `list_files`, `read_file`, `edit_file`, `bash` — read repos, edit files, run commands
+- **5 built-in tools**: `list_files`, `read_file`, `edit_file`, `bash`, `grep` — read repos, search code, edit files, run commands
 - **Multi-turn agent loop**: Think → Tool Call → Execute → Verify → Think again until done
 - **HITL approval gate**: Tools classified by risk (low/medium/high/critical) — require approval before running dangerous operations
 - **Safe sandbox**: Blocks path escapes, wrapper peeling (`sudo`, `env`), shell escapes, network commands
@@ -40,7 +40,7 @@ See [docs/user/architecture.md](docs/user/architecture.md) for details.
 ### go install (fastest)
 
 ```bash
-go install github.com/yolo-code/yolo/cmd/yolo@latest
+go install github.com/baobao1044/yolo-code/cmd/yolo@latest
 ```
 
 ### Clone and build
@@ -106,6 +106,7 @@ See [docs/user/configuration.md](docs/user/configuration.md) for full details.
 | `list_files` | — | Low | List all files in the repo |
 | `read_file` | `file` | Low | Read file contents |
 | `edit_file` | `file`, `content` | High | Overwrite file contents |
+| `grep` | `pattern`, `path?` | Low | Search file contents for a regex pattern |
 | `bash` | `command` | Medium–Critical | Run a shell command |
 
 See [docs/user/tools.md](docs/user/tools.md) for details.

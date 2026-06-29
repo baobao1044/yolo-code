@@ -149,15 +149,36 @@ func (b *Bus) Publish(ctx context.Context, e Event) error {
 		if !matches(s.topics, e.Type()) {
 			continue
 		}
-		select {
-		case s.ch <- env:
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-b.closeCh:
-			return ErrBusClosed
+		sent, err := b.sendSub(s, env, ctx)
+		if err != nil {
+			return err
+		}
+		if !sent {
+			// Channel was closed (subscriber removed); skip.
 		}
 	}
 	return nil
+}
+
+// sendSub sends env to a single subscriber channel, recovering from a
+// send-on-closed-channel panic if Close races past the closeCh guard. Returns
+// (true, nil) on success, (false, nil) if the channel was closed, and
+// (false, err) if the context or bus was canceled.
+func (b *Bus) sendSub(s subscription, env Envelope, ctx context.Context) (sent bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			sent = false
+			err = nil
+		}
+	}()
+	select {
+	case s.ch <- env:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-b.closeCh:
+		return false, ErrBusClosed
+	}
 }
 
 // Close marks the bus closed and closes every subscriber channel. It is

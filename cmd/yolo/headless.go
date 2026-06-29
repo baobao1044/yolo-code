@@ -245,6 +245,7 @@ func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
 	reg.Register(execpkg.NewRead(sandbox))
 	reg.Register(execpkg.NewListFiles(sandbox))
 	reg.Register(execpkg.NewEditFile(sandbox))
+	reg.Register(execpkg.NewGrep(sandbox))
 	execEng := execpkg.New(execpkg.Deps{
 		Registry: reg,
 		Sandbox:  sandbox,

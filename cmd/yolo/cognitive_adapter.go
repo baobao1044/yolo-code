@@ -79,6 +79,6 @@ func cognitiveToRuntimeDecision(d cog.ReflectionDecision) runtime.ReflectionDeci
 // native function/tool definitions in the API request (models that support
 // structured tool_calls when tools are provided).
 func newRealCognitiveCore(provider cog.Provider, bus *event.Bus) runtime.CognitiveCore {
-	tools := []string{"list_files", "read_file", "edit_file", "bash"}
+	tools := []string{"list_files", "read_file", "edit_file", "bash", "grep"}
 	return &cognitiveAdapter{core: cog.New(provider, bus, tools...)}
 }

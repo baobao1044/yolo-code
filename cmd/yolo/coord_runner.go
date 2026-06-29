@@ -171,6 +171,7 @@ func (r *runtimeAgentRunner) buildAdapters() (*execAdapter, *verifyAdapter, *pat
 	reg.Register(exec.NewRead(sandbox))
 	reg.Register(exec.NewListFiles(sandbox))
 	reg.Register(exec.NewEditFile(sandbox))
+	reg.Register(exec.NewGrep(sandbox))
 	execEng := exec.New(exec.Deps{
 		Registry: reg,
 		Sandbox:  sandbox,

@@ -37,6 +37,7 @@ func defaultCostRates() map[string]float64 {
 	return map[string]float64{
 		"bash":      0.005,
 		"read_file": 0.001,
+		"grep":      0.001,
 		"patch":     0.010,
 		"verify":    0.020,
 	}
