@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	cog "github.com/yolo-code/yolo/internal/cognitive"
 	coordpkg "github.com/yolo-code/yolo/internal/coord"
 	"github.com/yolo-code/yolo/internal/event"
 )
@@ -47,7 +46,7 @@ func runPlanCtx(ctx context.Context, goal string) (string, error) {
 		return "", err
 	}
 
-	runner := newRuntimeAgentRunner(repo, cog.NewStubProvider(128_000), bus).
+	runner := newRuntimeAgentRunner(repo, resolveProvider(), bus).
 		withCost(costPub)
 	planner := &heuristicPlanner{}
 

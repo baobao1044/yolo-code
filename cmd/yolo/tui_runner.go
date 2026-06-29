@@ -9,7 +9,6 @@ import (
 	"os"
 	"sync/atomic"
 
-	cog "github.com/yolo-code/yolo/internal/cognitive"
 	coordpkg "github.com/yolo-code/yolo/internal/coord"
 	"github.com/yolo-code/yolo/internal/event"
 	"github.com/yolo-code/yolo/internal/runtime"
@@ -155,7 +154,7 @@ func (d *tuiDriver) handle(env event.Envelope) {
 func (d *tuiDriver) runOrchestrator(goal string) {
 	costPub := newCostPublisher(d.bus)
 	costPub.Start(d.ctx)
-	runner := newRuntimeAgentRunner(d.repo, cog.NewStubProvider(128_000), d.bus).withCost(costPub)
+	runner := newRuntimeAgentRunner(d.repo, resolveProvider(), d.bus).withCost(costPub)
 	o := coordpkg.NewOrchestrator(
 		coordpkg.Config{MaxReworkCycles: 3, Concurrency: 1},
 		&heuristicPlanner{},

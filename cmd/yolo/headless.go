@@ -258,7 +258,7 @@ func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
 	return &headlessDeps{
 		context:  contextAdapter{eng: econtext.New(econtext.Deps{Bus: bus, Repo: repo})},
 		prompt:   promptAdapter{comp: prompt.New(nil, bus)},
-		cog:      newRealCognitiveCore(cog.NewStubProvider(128_000), bus),
+		cog:      newRealCognitiveCore(resolveProvider(), bus),
 		exec:     execAd,
 		verify:   verifyAd,
 		patcher:  &patchAdapter{engine: patchEng},
@@ -266,4 +266,14 @@ func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
 		repo:     repo,
 		bus:      bus,
 	}, nil
+}
+
+// resolveProvider returns the OpenAI-compatible provider when YOLO_API_KEY
+// (or OPENAI_API_KEY) is set, otherwise falls back to the deterministic stub
+// so the tool works offline / in golden tests.
+func resolveProvider() cog.Provider {
+	if p := cog.OpenAICompatProviderFromEnv(); p != nil {
+		return p
+	}
+	return cog.NewStubProvider(128_000)
 }
