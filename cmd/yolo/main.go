@@ -8,8 +8,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
+
+	coordpkg "github.com/yolo-code/yolo/internal/coord"
 )
 
 func main() {
@@ -20,24 +24,58 @@ func main() {
 }
 
 // run is the CLI entry. Sprint 1 supports `--headless` (pipe a prompt in,
-// print the event transcript). Other flags land with later sprints.
+// print the event transcript). Sprint 13 adds `--plan <goal>` which uses the
+// multi-agent orchestrator for complex goals and falls back to the headless
+// path for simple (Single-mode) goals.
 func run(args []string) error {
 	headless := false
-	for _, a := range args {
-		if a == "--headless" {
+	var planGoal string
+	var plan bool
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "--headless":
 			headless = true
-		}
-		if a == "--version" {
+		case "--plan":
+			if i+1 >= len(args) {
+				return errors.New("--plan requires a goal argument")
+			}
+			plan = true
+			planGoal = args[i+1]
+			i++
+		case "--version":
 			fmt.Println(version)
 			return nil
 		}
 	}
+
+	if plan {
+		if headless {
+			return errors.New("--plan and --headless are mutually exclusive")
+		}
+		if !coordpkg.ShouldOrchestrate(planGoal) {
+			// Single-mode requests are answered directly by the runtime.
+			out, err := runHeadlessCtx(context.Background(), strings.NewReader(planGoal), 0)
+			if err != nil {
+				return err
+			}
+			_, err = os.Stdout.WriteString(out)
+			return err
+		}
+		out, err := runPlanCtx(context.Background(), planGoal)
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.WriteString(out)
+		return err
+	}
+
 	if !headless {
 		// TUI is built (Sprint 9) but interactive wiring lands in the integration
 		// sprint (the runtime doesn't subscribe to user.* yet — see Sprint 9
 		// spec Decision 4). Until then the interactive path can't drive the
-		// runtime, so keep the hint pointing at --headless.
-		fmt.Fprintln(os.Stderr, "yolo: interactive TUI pending integration wiring — use `yolo --headless`")
+		// runtime, so keep the hint pointing at --headless or --plan.
+		fmt.Fprintln(os.Stderr, "yolo: interactive TUI pending integration wiring — use `yolo --headless` or `yolo --plan <goal>`")
 		return nil
 	}
 	out, err := runHeadlessCtx(context.Background(), os.Stdin, 0)

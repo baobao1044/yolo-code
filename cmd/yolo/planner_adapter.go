@@ -38,10 +38,11 @@ func (p *heuristicPlanner) Plan(ctx context.Context, goal string) (coord.Plan, c
 	}
 	for i, title := range items {
 		plan.Todos[i] = coord.Todo{
-			ID:       fmt.Sprintf("%s-t%d", plan.ID, i+1),
-			Title:    title,
-			Assignee: string(coord.RoleCoder),
-			Status:   coord.Pending,
+			ID:        fmt.Sprintf("%s-t%d", plan.ID, i+1),
+			Title:     title,
+			Assignee:  string(coord.RoleCoder),
+			Status:    coord.Pending,
+			Artifacts: artifactsFromTitle(title),
 		}
 	}
 	return plan, mode, nil
@@ -73,4 +74,16 @@ func clauses(goal string, mode coord.Mode) []string {
 		out = append(out, goal)
 	}
 	return out
+}
+
+// artifactsFromTitle extracts a likely file path from a todo title. It looks
+// for the first whitespace-delimited token containing a dot.
+func artifactsFromTitle(title string) []string {
+	for _, w := range strings.Fields(title) {
+		w = strings.Trim(w, ".,;:!?")
+		if strings.Contains(w, ".") {
+			return []string{w}
+		}
+	}
+	return nil
 }

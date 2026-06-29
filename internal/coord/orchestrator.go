@@ -40,14 +40,16 @@ import (
 // channel (idempotent); Run runs the blocking event loop (closes done on
 // return); Stop waits for done (idempotent, ctx-bound — mirrors infra).
 type Orchestrator struct {
-	cfg     Config
-	planner Planner
-	sub     Subscribable
-	pub     EventPublisher
-	runner  AgentRunner
+	cfg      Config
+	planner  Planner
+	sub      Subscribable
+	pub      EventPublisher
+	runner   AgentRunner
+	Verifier Verifier // optional; when set, triggers merge when all todos are done
 
 	plan  *Plan
 	sched *Scheduler
+	diffs map[string]string // per-todo diff collected from CodeReadyEvent
 
 	// ch is the coord.> subscription; Run drains it.
 	ch <-chan event.Envelope
@@ -159,10 +161,11 @@ func (o *Orchestrator) dispatchReady(ctx context.Context) {
 // appears before the code event.
 func (o *Orchestrator) spawnCoder(ctx context.Context, td *Todo) {
 	task := event.TaskAssignEvent{
-		PlanID: o.plan.ID,
-		TodoID: td.ID,
-		Agent:  string(RoleCoder),
-		Brief:  td.Title,
+		PlanID:    o.plan.ID,
+		TodoID:    td.ID,
+		Agent:     string(RoleCoder),
+		Brief:     td.Title,
+		Artifacts: td.Artifacts,
 	}
 	_ = o.pub.Publish(ctx, &task)
 	_ = o.runner.Run(ctx, RoleCoder, task)
@@ -171,17 +174,33 @@ func (o *Orchestrator) spawnCoder(ctx context.Context, td *Todo) {
 // requestReview spawns a reviewer for the todo's diff (File 12 §12.3.3). The
 // reviewer is spawned DIRECTLY — no review.request event (spec gap, Decision 2).
 func (o *Orchestrator) requestReview(ctx context.Context, e event.CodeReadyEvent) {
+	if o.diffs == nil {
+		o.diffs = make(map[string]string)
+	}
+	o.diffs[e.TodoID] = e.Diff
+	td := o.plan.Todo(e.TodoID)
+	var artifacts []string
+	if td != nil {
+		artifacts = td.Artifacts
+	}
 	task := event.TaskAssignEvent{
 		PlanID: e.PlanID, TodoID: e.TodoID, Agent: string(RoleReviewer),
-		Brief: e.Diff, // the reviewer audits the coder's diff
+		Brief:     e.Diff, // the reviewer audits the coder's diff
+		Artifacts: artifacts,
 	}
 	_ = o.runner.Run(ctx, RoleReviewer, task)
 }
 
 // requestTest spawns a tester for the todo (approved by the reviewer).
 func (o *Orchestrator) requestTest(ctx context.Context, e event.ReviewVerdictEvent) {
+	td := o.plan.Todo(e.TodoID)
+	var artifacts []string
+	if td != nil {
+		artifacts = td.Artifacts
+	}
 	task := event.TaskAssignEvent{
 		PlanID: e.PlanID, TodoID: e.TodoID, Agent: string(RoleTester),
+		Artifacts: artifacts,
 	}
 	_ = o.runner.Run(ctx, RoleTester, task)
 }
@@ -202,7 +221,8 @@ func (o *Orchestrator) reassignCoder(ctx context.Context, v event.ReviewVerdictE
 	}
 	task := event.TaskAssignEvent{
 		PlanID: o.plan.ID, TodoID: td.ID, Agent: string(RoleCoder),
-		Brief: td.Title + "\n\nReviewer comments:\n" + strings.Join(v.Comments, "\n"),
+		Brief:     td.Title + "\n\nReviewer comments:\n" + strings.Join(v.Comments, "\n"),
+		Artifacts: td.Artifacts,
 	}
 	_ = o.pub.Publish(ctx, &task)
 	_ = o.runner.Run(ctx, RoleCoder, task)
@@ -223,16 +243,41 @@ func (o *Orchestrator) reassignWithTestFail(ctx context.Context, e event.TestRep
 	}
 	task := event.TaskAssignEvent{
 		PlanID: o.plan.ID, TodoID: td.ID, Agent: string(RoleCoder),
-		Brief: td.Title + "\n\nTest output:\n" + e.Output,
+		Brief:     td.Title + "\n\nTest output:\n" + e.Output,
+		Artifacts: td.Artifacts,
 	}
 	_ = o.pub.Publish(ctx, &task)
 	_ = o.runner.Run(ctx, RoleCoder, task)
 }
 
-// markDone marks the todo Done and re-dispatches dependents.
+// markDone marks the todo Done and re-dispatches dependents. When all todos
+// are terminal and a verifier is wired, the orchestrator merges the
+// collected diffs and publishes plan.done.
 func (o *Orchestrator) markDone(ctx context.Context, todoID string) {
 	o.sched.MarkDone(todoID, func(td *Todo) { o.spawnCoder(ctx, td) })
+	if o.Verifier == nil {
+		return
+	}
+	if !o.plan.AllDone() {
+		return
+	}
+	merged, err := Merge(ctx, o.plan, o.diffs, o.Verifier)
+	done := err == nil && merged.Verified
+	summary := "merged"
+	if !done {
+		summary = err.Error()
+	}
+	_ = o.pub.Publish(ctx, &event.PlanDoneEvent{
+		PlanID:  o.plan.ID,
+		Done:    done,
+		Merged:  merged.Merged(),
+		Summary: summary,
+	})
 }
+
+// MergedReport is exported so PlanDoneEvent can report whether a merge
+// actually ran/hash conflicts.
+func (mp MergedPatch) Merged() bool { return mp.Summary.Done > 0 }
 
 // publishPlan marshals the typed Plan to RawMessage and publishes plan.ready.
 func (o *Orchestrator) publishPlan(ctx context.Context) error {

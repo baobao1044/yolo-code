@@ -289,11 +289,12 @@ func (e *UserQuitEvent) CausalID() TaskID { return "" }
 // --- L11: Coordination (File 12, §5.4.7) ---
 
 type TaskAssignEvent struct {
-	PlanID  string   `json:"plan_id"`
-	TodoID  string   `json:"todo_id"`
-	Agent   string   `json:"agent"`
-	Brief   string   `json:"brief"`
-	Context []string `json:"context"`
+	PlanID    string   `json:"plan_id"`
+	TodoID    string   `json:"todo_id"`
+	Agent     string   `json:"agent"`
+	Brief     string   `json:"brief"`
+	Context   []string `json:"context"`
+	Artifacts []string `json:"artifacts"`
 }
 
 func (e *TaskAssignEvent) Type() Topic      { return "coord.task.assign" }
@@ -306,6 +307,18 @@ type PlanReadyEvent struct {
 
 func (e *PlanReadyEvent) Type() Topic      { return "coord.plan.ready" }
 func (e *PlanReadyEvent) CausalID() TaskID { return TaskID(e.PlanID) }
+
+// PlanDoneEvent signals the orchestrator has finished all todos (and, when a
+// verifier is wired, the merge/re-verify step passed).
+type PlanDoneEvent struct {
+	PlanID  string `json:"plan_id"`
+	Done    bool   `json:"done"`
+	Merged  bool   `json:"merged"`
+	Summary string `json:"summary"`
+}
+
+func (e *PlanDoneEvent) Type() Topic      { return "plan.done" }
+func (e *PlanDoneEvent) CausalID() TaskID { return TaskID(e.PlanID) }
 
 type CodeReadyEvent struct {
 	PlanID     string `json:"plan_id"`
@@ -373,3 +386,15 @@ type CostAbortEvent struct {
 
 func (e *CostAbortEvent) Type() Topic      { return "cost.abort" }
 func (e *CostAbortEvent) CausalID() TaskID { return e.Task }
+
+// CostIncurredEvent is published whenever a tool call consumes budget. This
+// is the real accrual event used by the coord plan budget (Sprint 13).
+type CostIncurredEvent struct {
+	Task    TaskID  `json:"task"`
+	Tool    string  `json:"tool"`
+	Dollars float64 `json:"dollars"`
+	Reason  string  `json:"reason"`
+}
+
+func (e *CostIncurredEvent) Type() Topic      { return "cost.incurred" }
+func (e *CostIncurredEvent) CausalID() TaskID { return e.Task }

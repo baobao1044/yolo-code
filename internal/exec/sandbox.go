@@ -42,6 +42,9 @@ func NewSandbox(root, cwd string) *Sandbox {
 	return &Sandbox{root: root, cwd: cwd}
 }
 
+// Root returns the sandbox root directory.
+func (s *Sandbox) Root() string { return s.root }
+
 // Resolve confines p to the repo root (File 08 §8.4.2). A relative path is
 // joined to cwd; an absolute one is taken as-is. Symlinks are flattened with
 // EvalSymlinks before the confinement check so a symlink pointing outside is

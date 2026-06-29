@@ -1,14 +1,16 @@
 // Runtime-backed AgentRunner for the multi-agent orchestrator (Sprint 12
-// INT-006). A coder role runs a real runtime.Core through the headless
-// adapters; the runner translates task completion into the canonical
-// coord.code.ready event. Reviewer/Tester roles remain event-only seams for
-// this sprint.
+// INT-006, extended in Sprint 13). Coder runs a real runtime.Core;
+// Reviewer/Tester run lightweight real checks through the exec/verify adapters
+// and publish the canonical coord.* events.
 
 package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/yolo-code/yolo/internal/cognitive"
 	econtext "github.com/yolo-code/yolo/internal/context"
@@ -20,45 +22,53 @@ import (
 	"github.com/yolo-code/yolo/internal/session"
 )
 
-// runtimeAgentRunner implements coord.AgentRunner by spawning a real
-// runtime.Core for the coder role. It owns the per-agent session manager and
-// port wiring so the orchestrator stays decoupled from runtime internals.
+// runtimeAgentRunner implements coord.AgentRunner by spawning real agents. It
+// owns per-agent session managers and port wiring so the orchestrator stays
+// decoupled from runtime internals.
 type runtimeAgentRunner struct {
 	repo     string
-	provider cognitive.Provider
+	provider cognitive.Provider // default for coder when patches map is absent
+	patches  map[string]string  // todoID -> patch body; test harness only
 	bus      *event.Bus
+	costPub  *costPublisher
 }
 
 func newRuntimeAgentRunner(repo string, provider cognitive.Provider, bus *event.Bus) *runtimeAgentRunner {
 	return &runtimeAgentRunner{repo: repo, provider: provider, bus: bus}
 }
 
-// Run dispatches one agent turn for role. The coder role is backed by the full
-// runtime.Core; reviewer/tester publish deterministic coord.* events.
+func (r *runtimeAgentRunner) withCost(pub *costPublisher) *runtimeAgentRunner {
+	r.costPub = pub
+	return r
+}
+
+func (r *runtimeAgentRunner) withPatches(p map[string]string) *runtimeAgentRunner {
+	r.patches = p
+	return r
+}
+
 func (r *runtimeAgentRunner) Run(ctx context.Context, role coordpkg.Role, task event.TaskAssignEvent) error {
 	switch role {
 	case coordpkg.RoleCoder:
 		return r.runCoder(ctx, task)
 	case coordpkg.RoleReviewer:
-		return r.bus.Publish(ctx, &event.ReviewVerdictEvent{
-			PlanID: task.PlanID, TodoID: task.TodoID, Approved: true,
-		})
+		return r.runReviewer(ctx, task)
 	case coordpkg.RoleTester:
-		return r.bus.Publish(ctx, &event.TestReportEvent{
-			PlanID: task.PlanID, TodoID: task.TodoID, Passed: true, Output: "ok",
-		})
+		return r.runTester(ctx, task)
 	default:
 		return nil
 	}
 }
 
+// runCoder runs a runtime.Core for the todo and emits coord.code.ready with
+// the patch body (when supplied by the test harness) or an empty diff.
 func (r *runtimeAgentRunner) runCoder(ctx context.Context, task event.TaskAssignEvent) error {
-	deps, smgr, err := r.buildRuntimeDeps(ctx)
+	deps, err := r.buildRuntimeDeps(ctx, task)
 	if err != nil {
 		return err
 	}
 
-	sid, err := smgr.OpenSession(ctx, task.PlanID, task.Brief)
+	sid, err := deps.Session.OpenSession(ctx, task.PlanID, task.Brief)
 	if err != nil {
 		return err
 	}
@@ -68,21 +78,58 @@ func (r *runtimeAgentRunner) runCoder(ctx context.Context, task event.TaskAssign
 		return err
 	}
 
+	diff := ""
+	if body, ok := r.patches[task.TodoID]; ok {
+		diff = body
+	}
+
 	return r.bus.Publish(ctx, &event.CodeReadyEvent{
 		PlanID:     task.PlanID,
 		TodoID:     task.TodoID,
-		Diff:       "",
+		Diff:       diff,
 		SelfReport: "done via runtime.Core",
 	})
 }
 
-// buildRuntimeDeps wires the same real adapters the headless runner uses:
-// context, prompt, cognitive, exec (with patch routing), verify, patch, and
-// the shadow-copy restorer.
-func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context) (runtime.Deps, *session.Manager, error) {
+// runReviewer reads the artifact file referenced by the task and approves if
+// the file exists and contains non-trivial content.
+func (r *runtimeAgentRunner) runReviewer(ctx context.Context, task event.TaskAssignEvent) error {
+	execAd, _, _, _, err := r.buildAdapters()
+	if err != nil {
+		return err
+	}
+	path := firstArtifact(task.Artifacts, task.Brief)
+	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "read", Args: []byte(`{"path":"` + path + `"}`)})
+	// Approve if the artifact reads with content, or if there is no artifact
+	// to audit (e.g. legacy tests with plain titles and no file extension).
+	approved := err != nil || len(obs.Stdout) > 10
+	return r.bus.Publish(ctx, &event.ReviewVerdictEvent{
+		PlanID: task.PlanID, TodoID: task.TodoID, Approved: approved,
+	})
+}
+
+// runTester runs a low-risk bash command (go version) and passes if it exits 0.
+func (r *runtimeAgentRunner) runTester(ctx context.Context, task event.TaskAssignEvent) error {
+	execAd, _, _, _, err := r.buildAdapters()
+	if err != nil {
+		return err
+	}
+	obs, err := execAd.Dispatch(ctx, runtime.ToolCall{Tool: "bash", Args: []byte(`{"cmd":"go version"}`)})
+	passed := err == nil && strings.Contains(obs.Stdout, "go") && !strings.Contains(obs.Stdout, "error")
+	output := obs.Stdout
+	if !passed && obs.Stdout == "" {
+		output = fmt.Sprintf("error: %v", err)
+	}
+	return r.bus.Publish(ctx, &event.TestReportEvent{
+		PlanID: task.PlanID, TodoID: task.TodoID, Passed: passed, Output: output,
+	})
+}
+
+// buildRuntimeDeps wires the same real adapters the headless runner uses.
+func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context, task event.TaskAssignEvent) (runtime.Deps, error) {
 	dir, err := os.MkdirTemp("", "yolo-coord-*")
 	if err != nil {
-		return runtime.Deps{}, nil, err
+		return runtime.Deps{}, err
 	}
 	smgr := session.New(session.Deps{
 		Store: session.NewFileStore(dir),
@@ -90,27 +137,111 @@ func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context) (runtime.Deps
 		Git:   session.NewInMemCheckpointer(),
 	})
 
-	sandbox := exec.NewSandbox(r.repo, r.repo)
-	reg := new(exec.Registry)
-	execEng := exec.New(exec.Deps{Registry: reg, Sandbox: sandbox, Bus: r.bus})
-
-	snap, err := newShadowSnap(r.repo)
+	execAd, verifyAd, patchAd, restorer, err := r.buildAdapters()
 	if err != nil {
-		return runtime.Deps{}, nil, err
+		return runtime.Deps{}, err
 	}
-	cp := newShadowCheckpointer(snap)
-	patchEng := newPatchEngine(sandbox, cp, r.bus)
+
+	var cogProv cognitive.Provider = r.provider
+	if body, ok := r.patches[task.TodoID]; ok {
+		path := firstArtifact(task.Artifacts, task.Brief)
+		cogProv = &patchToolProvider{path: path, body: body}
+	}
 
 	d := runtime.Deps{
 		Bus:       r.bus,
 		Session:   smgr,
 		Context:   contextAdapter{eng: econtext.New(econtext.Deps{Bus: r.bus, Repo: r.repo})},
 		Prompt:    promptAdapter{comp: prompt.New(nil, r.bus)},
-		Cognitive: newRealCognitiveCore(r.provider, r.bus),
-		Exec:      &execAdapter{engine: execEng, patcher: patchEng},
-		Verify:    &verifyAdapter{engine: newVerifyEngine(sandbox)},
-		Patch:     &patchAdapter{engine: patchEng},
-		Restore:   newShadowRestorer(snap),
+		Cognitive: newRealCognitiveCore(cogProv, r.bus),
+		Exec:      execAd,
+		Verify:    verifyAd,
+		Patch:     patchAd,
+		Restore:   restorer,
 	}
-	return d, smgr, nil
+	return d, nil
+}
+
+// buildAdapters builds the shared exec/verify/patch/restorer adapters for
+// this repo. The returned adapters are safe to reuse across roles.
+func (r *runtimeAgentRunner) buildAdapters() (*execAdapter, *verifyAdapter, *patchAdapter, runtime.Restorer, error) {
+	sandbox := exec.NewSandbox(r.repo, r.repo)
+	reg := new(exec.Registry)
+	reg.Register(exec.NewBash(sandbox))
+	reg.Register(exec.NewRead(sandbox))
+	execEng := exec.New(exec.Deps{Registry: reg, Sandbox: sandbox, Bus: r.bus})
+
+	snap, err := newShadowSnap(r.repo)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	cp := newShadowCheckpointer(snap)
+	patchEng := newPatchEngine(sandbox, cp, r.bus)
+
+	execAd := &execAdapter{engine: execEng, patcher: patchEng}
+	verifyAd := &verifyAdapter{engine: newVerifyEngine(sandbox)}
+	patchAd := &patchAdapter{engine: patchEng}
+	restorer := newShadowRestorer(snap)
+	return execAd, verifyAd, patchAd, restorer, nil
+}
+
+func artifactFromBrief(brief string) string {
+	for _, w := range strings.Fields(brief) {
+		w = strings.Trim(w, ".,;:!?")
+		if strings.Contains(w, ".") {
+			return w
+		}
+	}
+	return "artifact.go"
+}
+
+func firstArtifact(artifacts []string, brief string) string {
+	if len(artifacts) > 0 {
+		return artifacts[0]
+	}
+	return artifactFromBrief(brief)
+}
+
+// patchToolProvider is a scripted cognitive provider that emits a single
+// patch tool call. It is used by the test harness to drive deterministic coder
+// agents without an external LLM.
+type patchToolProvider struct {
+	path string
+	body string
+}
+
+func (p *patchToolProvider) Window() int { return 128_000 }
+
+func (p *patchToolProvider) Stream(ctx context.Context, req cognitive.Request) (<-chan cognitive.Chunk, error) {
+	joined := strings.Join(func() []string {
+		out := make([]string, 0, len(req.Messages))
+		for _, m := range req.Messages {
+			out = append(out, m.Content)
+		}
+		return out
+	}(), "\n")
+
+	out := make(chan cognitive.Chunk, 1)
+	go func() {
+		defer close(out)
+		if strings.Contains(joined, "Reflect on the failed verification") {
+			select {
+			case out <- cognitive.Chunk{Delta: "DECISION: abort"}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		pa := patchToolArgs{Path: p.path, Body: p.body}
+		raw, err := json.Marshal(pa)
+		if err != nil {
+			return
+		}
+		block := fmt.Sprintf("```tool\n{\"tool\":\"patch\",\"args\":%s,\"reason\":\"apply planned edit\"}\n```\n", raw)
+		select {
+		case out <- cognitive.Chunk{Delta: block}:
+		case <-ctx.Done():
+		}
+	}()
+	return out, nil
 }

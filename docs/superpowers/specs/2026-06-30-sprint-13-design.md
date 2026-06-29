@@ -120,13 +120,13 @@ attributable.
 
 ## 6. Exit bar checklist
 
-- [ ] `S13-001` implemented + tests pass
-- [ ] `S13-002` multi-agent regression passes
-- [ ] `S13-003` cost events wired
-- [ ] `S13-004` `--plan` CLI works
-- [ ] `go test ./...` green
-- [ ] `go test -tags golden ./cmd/yolo` green
-- [ ] `go vet ./cmd/yolo ./internal/runtime ./internal/coord` green
-- [ ] `gofmt` clean
-- [ ] Spec committed to `docs/superpowers/specs/2026-06-30-sprint-13-design.md`
-- [ ] All work pushed to `master`
+- [x] `S13-001` implemented + tests pass
+- [x] `S13-002` multi-agent regression passes
+- [x] `S13-003` cost events wired
+- [x] `S13-004` `--plan` CLI works
+- [x] `go test ./...` green
+- [x] `go test -tags golden ./cmd/yolo` green
+- [x] `go vet ./cmd/yolo ./internal/runtime ./internal/coord` green
+- [x] `gofmt` clean
+- [x] Spec committed to `docs/superpowers/specs/2026-06-30-sprint-13-design.md`
+- [x] All work pushed to `master`

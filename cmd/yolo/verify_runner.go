@@ -15,11 +15,17 @@ import (
 )
 
 // verifyRunner shells out to tools (gofmt, go vet, go build, go test) via
-// os/exec. The runtime context is used directly so cancellation propagates.
-type verifyRunner struct{}
+// os/exec inside the repo root.
+type verifyRunner struct {
+	root string
+}
 
-func (verifyRunner) Run(ctx context.Context, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
+func (r verifyRunner) Run(ctx context.Context, name string, args ...string) (stdout, stderr string, exitCode int, err error) {
 	cmd := osexec.CommandContext(ctx, name, args...)
+	cmd.Dir = r.root
+	if r.root == "" {
+		cmd.Dir = "."
+	}
 	var outb, errb strings.Builder
 	cmd.Stdout = &outb
 	cmd.Stderr = &errb
@@ -54,7 +60,7 @@ func (f *verifyFS) Read(ctx context.Context, path string) (string, error) {
 // and filesystem. The composition root uses this to satisfy runtime.Verifier.
 func newVerifyEngine(sandbox *exec.Sandbox) *verify.Engine {
 	return verify.NewEngine(verify.Deps{
-		Runner: verifyRunner{},
+		Runner: verifyRunner{root: sandbox.Root()},
 		FS:     &verifyFS{sandbox: sandbox},
 	})
 }
