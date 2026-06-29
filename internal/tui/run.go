@@ -28,8 +28,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		s := msg.String()
 		switch s {
-		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r":
+		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r", "q", "?", "tab":
 			return handleInput(m, msg)
+		case "pgup":
+			m.scrollOffset += 10
+			return m, nil
+		case "pgdown":
+			m.scrollOffset -= 10
+			if m.scrollOffset < 0 {
+				m.scrollOffset = 0
+			}
+			return m, nil
 		case "backspace":
 			if len(m.inputText) > 0 {
 				r := []rune(m.inputText)

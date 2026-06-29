@@ -37,7 +37,11 @@ type messageView struct {
 
 // approvalView is a pending approval.request (TUI-006 — drives y/n handling).
 type approvalView struct {
-	id string
+	id      string
+	tool    string
+	summary string
+	preview string
+	risk    string
 }
 
 // diffView is the diff viewer state (TUI-004). PatchAppliedEvent has no
@@ -68,6 +72,7 @@ type boardView struct {
 type todoView struct {
 	todoID string
 	agent  string
+	brief  string
 	status string
 }
 
@@ -82,9 +87,10 @@ type Model struct {
 	ready         bool
 
 	// task header (TUI-001)
-	taskID string
-	goal   string // TaskStartedEvent has no Kind field — header shows the goal (spec gap)
-	state  string // current FSM state label, from state.change (TUI-003); "" until then
+	taskID   string
+	goal     string // TaskStartedEvent has no Kind field — header shows the goal (spec gap)
+	state    string // current FSM state label, from state.change (TUI-003); "" until then
+	stateWhy string // transition reason, from StateChangeEvent.Why
 
 	// chat (TUI-002)
 	messages      []messageView
@@ -123,6 +129,13 @@ type Model struct {
 	// Reset to "" on submit (optimistic echo → user.submit).
 	inputText string
 
+	// scroll (D1): scrollOffset > 0 means scrolled up from the bottom;
+	// 0 = auto-scroll to latest message.
+	scrollOffset int
+
+	// help overlay (D2): toggled by ? key.
+	showHelp bool
+
 	// bus bridge
 	sub       <-chan event.Envelope
 	cancel    chan struct{}
@@ -151,4 +164,27 @@ func (m Model) Init() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(busWatcher(m.sub, m.cancel), nextTick)
+}
+
+// nextFocus cycles through non-empty panes: chat → diff (if present) →
+// board (if present) → chat. Skips panes with no content.
+func nextFocus(m Model) pane {
+	switch m.focus {
+	case paneChat:
+		if m.diff != nil {
+			return paneDiff
+		}
+		if m.board != nil {
+			return paneBoard
+		}
+		return paneChat
+	case paneDiff:
+		if m.board != nil {
+			return paneBoard
+		}
+		return paneChat
+	case paneBoard:
+		return paneChat
+	}
+	return paneChat
 }

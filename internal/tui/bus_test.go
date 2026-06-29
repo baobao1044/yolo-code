@@ -76,6 +76,7 @@ func TestSubscribeTopicsAreRenderingTopics(t *testing.T) {
 		"llm.>", "assistant.message", "tool.>", "observation.received",
 		"approval.request", "verification.>", "reflection.note",
 		"patch.applied", "memory.update", "coord.>", "cost.>", "error",
+		"user.>",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("subscribed %d topics, want %d: got %v", len(got), len(want), got)

@@ -12,6 +12,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strconv"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,21 +58,56 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.liveAssistant = ""
 		m.streaming = false
 	case *event.ToolCallEvent:
-		// "calling <tool>" line; the spinner reads activeTool (TUI-007).
+		// "calling <tool>: <reason>" line; the spinner reads activeTool (TUI-007).
 		m.activeTool = e.Tool
-		m.messages = append(m.messages, messageView{role: "tool", text: "calling " + e.Tool})
+		detail := e.Reason
+		if detail == "" && len(e.Args) > 0 {
+			detail = truncateJSON(e.Args, 80)
+		}
+		text := "calling " + e.Tool
+		if detail != "" {
+			text += ": " + detail
+		}
+		m.messages = append(m.messages, messageView{role: "tool", text: text})
 	case *event.ToolResultEvent:
-		// Tool finished: clear the active tool + append a summarized line.
-		// ToolResultEvent has no outcome field (spec gap — no ✓/✗ badge); the
-		// line names the tool. The full obs is display-truncated elsewhere.
+		// Tool finished: clear the active tool + append result line.
 		m.activeTool = ""
-		m.messages = append(m.messages, messageView{role: "tool", text: e.Tool})
+		text := e.Tool
+		if len(e.Obs) > 0 {
+			text += " → " + truncateJSON(e.Obs, 120)
+		}
+		m.messages = append(m.messages, messageView{role: "tool", text: text})
 	case *event.ObservationEvent:
-		// Truncated observation preview (display-only; full obs in the log).
-		m.messages = append(m.messages, messageView{role: "observation", text: e.Tool})
+		// Observation with preview content.
+		text := e.Tool
+		if len(e.Obs) > 0 {
+			text += ": " + truncateJSON(e.Obs, 120)
+		}
+		m.messages = append(m.messages, messageView{role: "observation", text: text})
 	case *event.ReflectionEvent:
 		// Dimmed inline note (File 14 §14.5).
 		m.messages = append(m.messages, messageView{role: "reflection", text: e.Note})
+
+	case *event.ApprovalRequestEvent:
+		// Pending approval: populate the approval view so the rail shows
+		// tool/summary/risk and the y/n handler becomes active (TUI-006).
+		m.approval = &approvalView{
+			id:      e.ApprovalID,
+			tool:    e.Tool,
+			summary: e.Summary,
+			preview: e.Preview,
+			risk:    string(e.Risk),
+		}
+
+	case *event.ErrorEvent:
+		// Surface runtime errors as red chat lines + banner (previously
+		// subscribed but silently dropped).
+		msg := e.Msg
+		if e.Layer != "" {
+			msg = e.Layer + ": " + msg
+		}
+		m.messages = append(m.messages, messageView{role: "error", text: msg})
+		m.banner = msg
 
 	// --- Status bar (TUI-003, File 14 §14.7.4) ---
 	case *event.StateChangeEvent:
@@ -79,6 +115,7 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		// does NOT model the FSM — it labels it (File 14 §14.4.2). This is the
 		// mutation guard: without it the bar never reflects the runtime's state.
 		m.state = e.To
+		m.stateWhy = e.Why
 	case *event.ContextBuiltEvent:
 		// Flash "context ready" (File 14 §14.5). ContextBuiltEvent has no
 		// item/token count field (spec gap — File 14 idealizes "N items, B
@@ -115,6 +152,21 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		// user sees why verification broke.
 		m.diff = &diffView{reason: e.Reason}
 		m.focus = paneDiff
+	case *event.VerificationStageEvent:
+		// Per-stage pass/fail indicator appended to chat.
+		icon := successStyle.Render("✔")
+		if e.Status == "fail" {
+			icon = errorStyle.Render("✘")
+		} else if e.Status == "warn" {
+			icon = warningStyle.Render("⚠")
+		} else if e.Status == "skip" {
+			icon = mutedStyle.Render("○")
+		}
+		text := e.Stage
+		if e.Detail != "" {
+			text += ": " + e.Detail
+		}
+		m.messages = append(m.messages, messageView{role: "verification", text: icon + " " + text})
 
 	// --- Cost meter (TUI-005, File 14 §14.7.5) ---
 	case *event.CostDegradedEvent:
@@ -141,13 +193,12 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		// fill (spec gap, documented).
 		m.board = &boardView{planID: e.PlanID}
 	case *event.TaskAssignEvent:
-		// Append a todo column with the agent role + status "assigned". Ignored
-		// if no board is open (the board opens only on coord.plan.ready — the
-		// TUI doesn't fabricate one).
+		// Append a todo column with the agent role + brief + status "assigned".
 		if m.board != nil {
 			m.board.todos = append(m.board.todos, todoView{
 				todoID: e.TodoID,
 				agent:  e.Agent,
+				brief:  e.Brief,
 				status: "assigned",
 			})
 		}
@@ -162,6 +213,9 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 			status = "approved"
 		}
 		boardUpdateTodo(m, e.TodoID, status)
+		if len(e.Comments) > 0 {
+			m.messages = append(m.messages, messageView{role: "review", text: "review: " + e.Comments[0]})
+		}
 	case *event.TestReportEvent:
 		// Mark tested:pass / tested:fail by the Passed flag.
 		status := "tested:fail"
@@ -169,6 +223,19 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 			status = "tested:pass"
 		}
 		boardUpdateTodo(m, e.TodoID, status)
+		if !e.Passed && e.Output != "" {
+			out := e.Output
+			if len(out) > 200 {
+				out = out[:199] + "…"
+			}
+			m.messages = append(m.messages, messageView{role: "error", text: "test failed: " + out})
+		}
+
+	// --- User echo-back: clear approval on resolve ---
+	case *event.UserApproveEvent:
+		m.approval = nil
+	case *event.UserRejectEvent:
+		m.approval = nil
 	}
 	return m, relaunchWatcher(m)
 }
@@ -197,4 +264,30 @@ func boardUpdateTodo(m Model, todoID, status string) {
 			return
 		}
 	}
+}
+
+// truncateJSON returns a human-readable snippet from a json.RawMessage,
+// truncated to maxLen runes. Used for tool args, observations, and results.
+func truncateJSON(raw json.RawMessage, maxLen int) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	s := string(raw)
+	// Try to prettify if it's valid JSON.
+	var v interface{}
+	if json.Unmarshal(raw, &v) == nil {
+		b, err := json.Marshal(v)
+		if err == nil {
+			s = string(b)
+		}
+	}
+	// Trim surrounding quotes for string values.
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
 }

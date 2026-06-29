@@ -68,10 +68,18 @@ func handleInput(m Model, key tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, publish(m.publisher, &event.UserResumeEvent{Task: event.TaskID(m.taskID)})
-	case "ctrl+c":
+	case "ctrl+c", "q":
 		// Quit: publish user.quit AND return tea.Quit so the program exits.
 		// Batch the publish + the quit so both run (publish off-thread, then quit).
 		return m, tea.Batch(publish(m.publisher, &event.UserQuitEvent{}), tea.Quit)
+	case "?":
+		// Toggle help overlay.
+		m.showHelp = !m.showHelp
+		return m, nil
+	case "tab":
+		// Cycle focus through non-empty panes.
+		m.focus = nextFocus(m)
+		return m, nil
 	case "enter":
 		// Submit on Enter with non-empty input: optimistic echo + publish +
 		// clear the input line. The echo keeps the UI feeling instant (P1);
@@ -82,6 +90,7 @@ func handleInput(m Model, key tea.KeyMsg) (Model, tea.Cmd) {
 		text := m.inputText
 		m.messages = append(m.messages, messageView{role: "user", text: text})
 		m.inputText = ""
+		m.scrollOffset = 0 // reset scroll on new message
 		return m, publish(m.publisher, &event.UserSubmitEvent{Text: text})
 	}
 	// Otherwise: no-op for the pure test path (the production path routes to

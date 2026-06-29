@@ -38,6 +38,7 @@ var renderTopics = []event.Topic{
 	"llm.>", "assistant.message", "tool.>", "observation.received",
 	"approval.request", "verification.>", "reflection.note",
 	"patch.applied", "memory.update", "coord.>", "cost.>", "error",
+	"user.>",
 }
 
 // subscribe registers the rendering topics on the bus and returns the single

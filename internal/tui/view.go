@@ -23,6 +23,9 @@ const (
 	wideLayout   = 100 // use side-by-side rail only when wide enough
 )
 
+// Spinner frames (braille animation).
+var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
 var (
 	// Role colors used in the chat pane.
 	headerStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
@@ -39,6 +42,8 @@ var (
 	successStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
 	warningStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	mutedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	focusStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	unfocusStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	chatPaneStyle = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, true, false, false).
@@ -53,6 +58,11 @@ func View(m Model) string {
 		return welcomeMsg
 	}
 
+	// Help overlay takes over the entire screen.
+	if m.showHelp {
+		return helpView(m)
+	}
+
 	// Fixed chrome — each is one logical line, bounded by m.width.
 	head := headerView(m)
 	banner := bannerView(m)
@@ -64,6 +74,8 @@ func View(m Model) string {
 	inputH := lipgloss.Height(inputLine)
 	statusH := lipgloss.Height(statusLine)
 	contentH := m.height - headH - bannerH - inputH - statusH
+
+	// B3: guard negative contentH.
 	if contentH < minHeight/2 {
 		contentH = minHeight / 2
 	}
@@ -80,7 +92,7 @@ func View(m Model) string {
 	)
 }
 
-// headerView renders the task id, goal, and current state.
+// headerView renders the task id, goal, current state, and spinner/status icon.
 func headerView(m Model) string {
 	tid := m.taskID
 	if tid == "" {
@@ -92,9 +104,30 @@ func headerView(m Model) string {
 	}
 	line := fmt.Sprintf("yolo — task %s · %s", tid, goal)
 	if m.state != "" {
-		line += fmt.Sprintf(" · %s", stateStyle.Render(m.state))
+		// B2: render spinner or terminal icon next to state.
+		icon := spinnerGlyph(m)
+		line += fmt.Sprintf(" · %s %s", icon, stateStyle.Render(m.state))
+	}
+	// C3: show transition reason dimmed below state.
+	if m.stateWhy != "" {
+		line += mutedStyle.Render(" (" + m.stateWhy + ")")
 	}
 	return headerStyle.Width(m.width).Render(line)
+}
+
+// spinnerGlyph returns the appropriate glyph for the current model state.
+// B2: animates when streaming or tool active, static icon for terminal states.
+func spinnerGlyph(m Model) string {
+	switch m.state {
+	case "DONE":
+		return successStyle.Render("✔")
+	case "CANCELLED":
+		return errorStyle.Render("✘")
+	}
+	if m.streaming || m.activeTool != "" {
+		return spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	}
+	return mutedStyle.Render("●")
 }
 
 // bannerView renders transient flashes (errors, context ready, memory update).
@@ -120,47 +153,83 @@ func bannerView(m Model) string {
 	return style.Width(m.width).Render(line)
 }
 
-// inputView renders the input prompt.
+// inputView renders the input prompt with a blinking cursor (D4).
 func inputView(m Model) string {
-	text := m.inputText
-	if text == "" {
+	cursor := "▎"
+	if m.spinnerFrame%10 < 5 {
+		cursor = " "
+	}
+	text := m.inputText + cursor
+	if m.inputText == "" && cursor == " " {
 		text = "_"
 	}
 	return promptStyle.Width(m.width).Render("> " + text)
 }
 
-// statusView renders the bottom status line.
+// statusView renders the bottom status line with focus indicators (D3).
 func statusView(m Model) string {
 	var hints []string
+
+	// D3: focus indicator.
+	chatLabel := focusLabel("chat", m.focus == paneChat)
+	diffLabel := focusLabel("diff", m.focus == paneDiff && m.diff != nil)
+	boardLabel := focusLabel("board", m.focus == paneBoard && m.board != nil)
+	hints = append(hints, chatLabel)
+	if m.diff != nil {
+		hints = append(hints, diffLabel)
+	}
+	if m.board != nil {
+		hints = append(hints, boardLabel)
+	}
+
 	if m.approval != nil {
 		hints = append(hints, "approval: y/n")
 	}
 	if m.state == "PAUSED" {
 		hints = append(hints, "paused — ctrl+r to resume")
 	} else {
-		hints = append(hints, "ctrl+c quit · esc cancel · ctrl+p pause")
+		hints = append(hints, "q quit · esc cancel · ctrl+p pause · ? help")
 	}
 	if m.approval == nil && m.state != "PAUSED" {
 		hints = append(hints, "type goal + Enter")
 	}
+	if m.scrollOffset > 0 {
+		hints = append(hints, fmt.Sprintf("↑%d lines", m.scrollOffset))
+	}
 	return mutedStyle.Width(m.width).Render(strings.Join(hints, " · "))
+}
+
+// focusLabel renders a focus indicator tag for a pane.
+func focusLabel(name string, active bool) string {
+	if active {
+		return focusStyle.Render("[" + name + "]")
+	}
+	return unfocusStyle.Render("[" + name + "]")
 }
 
 // bodyView renders the chat pane and, when the terminal is wide enough, a
 // side rail.
 func bodyView(m Model, h int) string {
 	chatW, railW, sep := layoutWidths(m.width)
-	chatText := chatView(m, chatW, h)
-	railText := railView(m, railW, h)
 
 	if sep == "" {
+		// B1: narrow layout — split height in half, not double it.
+		chatH := h / 2
+		if chatH < 2 {
+			chatH = 2
+		}
+		railH := h - chatH
+		chatText := chatView(m, chatW, chatH)
+		railText := railView(m, railW, railH)
 		return lipgloss.JoinVertical(
 			lipgloss.Left,
-			chatPaneStyle.Width(m.width).Height(h).Render(chatText),
-			railPaneStyle.Width(m.width).Height(h).Render(railText),
+			chatPaneStyle.Width(m.width).Height(chatH).Render(chatText),
+			railPaneStyle.Width(m.width).Height(railH).Render(railText),
 		)
 	}
 
+	chatText := chatView(m, chatW, h)
+	railText := railView(m, railW, h)
 	chatBlock := chatPaneStyle.Width(chatW).Height(h).Render(chatText)
 	railBlock := railPaneStyle.Width(railW).Height(h).Render(railText)
 	return lipgloss.JoinHorizontal(lipgloss.Top, chatBlock, sep, railBlock)
@@ -182,7 +251,7 @@ func layoutWidths(width int) (chatW int, railW int, sep string) {
 	return
 }
 
-// chatView renders the chat pane, showing the last contentH lines.
+// chatView renders the chat pane. Supports scroll offset (D1).
 func chatView(m Model, w, h int) string {
 	var b strings.Builder
 	if m.streaming && m.thinking != "" {
@@ -212,6 +281,12 @@ func chatView(m Model, w, h int) string {
 			prefix = observationStyle.Render("obs: ")
 		case "reflection":
 			prefix = reflectionStyle.Render("reflection: ")
+		case "error":
+			prefix = errorStyle.Render("error: ")
+		case "verification":
+			prefix = mutedStyle.Render("")
+		case "review":
+			prefix = mutedStyle.Render("review: ")
 		default:
 			prefix = mutedStyle.Render(msg.role + ": ")
 		}
@@ -222,7 +297,29 @@ func chatView(m Model, w, h int) string {
 		return mutedStyle.Render("no messages")
 	}
 	wrapped := lipgloss.NewStyle().Width(w).Render(content)
+
+	// D1: apply scroll offset.
+	if m.scrollOffset > 0 {
+		return scrollUp(wrapped, h, m.scrollOffset)
+	}
 	return truncateHeight(wrapped, h)
+}
+
+// scrollUp shows older content by offset lines from the top. When offset is
+// large enough, it shows the earliest lines. Falls back to truncateHeight when
+// offset exceeds available lines.
+func scrollUp(text string, h, offset int) string {
+	lines := strings.Split(text, "\n")
+	total := len(lines)
+	start := total - h - offset
+	if start < 0 {
+		start = 0
+	}
+	end := start + h
+	if end > total {
+		end = total
+	}
+	return strings.Join(lines[start:end], "\n")
 }
 
 // railView renders the side panel: approval prompt, cost rail, diff viewer, or
@@ -230,8 +327,29 @@ func chatView(m Model, w, h int) string {
 func railView(m Model, w, h int) string {
 	var b strings.Builder
 
+	// C2: approval rail with full details.
 	if m.approval != nil {
 		_, _ = fmt.Fprintln(&b, warningStyle.Render("Approval required"))
+		if m.approval.tool != "" {
+			_, _ = fmt.Fprintf(&b, "tool: %s\n", m.approval.tool)
+		}
+		if m.approval.summary != "" {
+			_, _ = fmt.Fprintf(&b, "%s\n", m.approval.summary)
+		}
+		if m.approval.risk != "" {
+			riskStyle := warningStyle
+			if m.approval.risk == "high" {
+				riskStyle = errorStyle
+			}
+			_, _ = fmt.Fprintf(&b, "risk: %s\n", riskStyle.Render(m.approval.risk))
+		}
+		if m.approval.preview != "" {
+			preview := m.approval.preview
+			if len(preview) > 120 {
+				preview = preview[:119] + "…"
+			}
+			_, _ = fmt.Fprintf(&b, "%s\n", mutedStyle.Render(preview))
+		}
 		_, _ = fmt.Fprintln(&b, "y: approve · n: reject")
 	}
 
@@ -247,7 +365,11 @@ func railView(m Model, w, h int) string {
 			_, _ = fmt.Fprintf(&b, "%s\n", errorStyle.Render(m.diff.reason))
 		}
 		for _, f := range m.diff.files {
-			_, _ = fmt.Fprintf(&b, "%s +%d -%d\n", f.Path, f.Insertions, f.Deletions)
+			suffix := ""
+			if f.New {
+				suffix = successStyle.Render(" (new)")
+			}
+			_, _ = fmt.Fprintf(&b, "%s +%d -%d%s\n", f.Path, f.Insertions, f.Deletions, suffix)
 		}
 		if len(m.diff.files) == 0 && m.diff.reason == "" {
 			_, _ = fmt.Fprintln(&b, "(no files)")
@@ -258,7 +380,15 @@ func railView(m Model, w, h int) string {
 		_, _ = fmt.Fprintf(&b, "%s %s\n", "plan:", m.board.planID)
 		for _, td := range m.board.todos {
 			status := statusDot(td.status)
-			_, _ = fmt.Fprintf(&b, "%s %s · %s\n", status, td.agent, td.status)
+			line := fmt.Sprintf("%s %s · %s", status, td.agent, td.status)
+			if td.brief != "" {
+				brief := td.brief
+				if len(brief) > 40 {
+					brief = brief[:39] + "…"
+				}
+				line += " — " + brief
+			}
+			_, _ = fmt.Fprintf(&b, "%s\n", line)
 		}
 	}
 
@@ -281,6 +411,27 @@ func statusDot(status string) string {
 		return errorStyle.Render("●")
 	}
 	return mutedStyle.Render("○")
+}
+
+// helpView renders the help overlay (D2).
+func helpView(m Model) string {
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "%s\n\n", headerStyle.Render("yolo — key bindings"))
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Enter", "submit goal/message")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Esc", "cancel current task")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Ctrl+P", "pause task")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Ctrl+R", "resume paused task")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "q / Ctrl+C", "quit")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "y / n", "approve / reject (when approval pending)")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Tab", "switch focus: chat → diff → board")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "PgUp / PgDn", "scroll chat up / down")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "Backspace", "delete last character")
+	_, _ = fmt.Fprintf(&b, "  %-16s %s\n", "?", "toggle this help")
+	_, _ = fmt.Fprintf(&b, "\n%s\n", mutedStyle.Render("Press any key to close"))
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Render(b.String())
 }
 
 // truncateHeight keeps only the last h lines of text.
