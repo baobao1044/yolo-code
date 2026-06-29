@@ -23,7 +23,6 @@ func TestRuntimeAgentRunnerSpawnsCoder(t *testing.T) {
 	defer func() { _ = bus.Close() }()
 
 	rec := newRecordingSub(bus)
-	defer rec.close()
 
 	// Capture the runtime-level events emitted by the coder agent too.
 	allCh := bus.Subscribe(event.Topic(">"))
@@ -57,7 +56,7 @@ func TestRuntimeAgentRunnerSpawnsCoder(t *testing.T) {
 		t.Fatalf("orchestrator Run: %v", err)
 	}
 	_ = bus.Close()
-	time.Sleep(10 * time.Millisecond)
+	rec.close() // wait for drain to finish before reading rec.types
 
 	if len(rec.types) == 0 || rec.types[0] != "coord.plan.ready" {
 		t.Fatalf("first event = %v, want coord.plan.ready", rec.types)

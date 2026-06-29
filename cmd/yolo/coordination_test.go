@@ -37,18 +37,20 @@ type recordingSub struct {
 	ch     <-chan event.Envelope
 	types  []event.Topic
 	byTodo map[string][]event.Topic
+	done   chan struct{}
 }
 
 // newRecordingSub subscribes coord.> on the bus and drains in a goroutine,
 // recording event types in arrival order + per-todo type sequences.
 func newRecordingSub(bus *event.Bus) *recordingSub {
 	ch := bus.Subscribe(event.Topic("coord.>"))
-	rs := &recordingSub{ch: ch, byTodo: map[string][]event.Topic{}}
+	rs := &recordingSub{ch: ch, byTodo: map[string][]event.Topic{}, done: make(chan struct{})}
 	go rs.drain()
 	return rs
 }
 
 func (r *recordingSub) drain() {
+	defer close(r.done)
 	for env := range r.ch {
 		r.types = append(r.types, env.Evt.Type())
 		switch e := env.Evt.(type) {
@@ -64,8 +66,9 @@ func (r *recordingSub) drain() {
 	}
 }
 
-// close stops the drain goroutine (the bus close ends the range).
-func (r *recordingSub) close() {}
+// close waits for the drain goroutine to finish, establishing a happens-before
+// relationship so the test goroutine can safely read types and byTodo.
+func (r *recordingSub) close() { <-r.done }
 
 // fakeAgentRunner publishes canned coord.* events per role, exactly as the
 // board expects them. It publishes to the bus (the recordingSub reads it).
@@ -124,7 +127,6 @@ func TestL11_007_CoordEventsCanonicalOrder(t *testing.T) {
 		coord.Todo{ID: "t2", Title: "add tests", Assignee: "coder", Status: coord.Pending},
 	)
 	rec := newRecordingSub(bus)
-	defer rec.close()
 
 	o := coord.NewOrchestrator(coord.Config{MaxReworkCycles: 3, Concurrency: 1},
 		cannedPlanner{plan: plan}, bus, bus, runner)
@@ -134,9 +136,8 @@ func TestL11_007_CoordEventsCanonicalOrder(t *testing.T) {
 	if err := o.Run(ctx, plan.Goal); err != nil {
 		t.Fatalf("orchestrator Run: %v", err)
 	}
-	// Give the recording goroutine a moment to drain the last events.
 	_ = bus.Close()
-	time.Sleep(10 * time.Millisecond)
+	rec.close() // wait for drain to finish before reading rec.types
 
 	// plan.ready must be the FIRST event.
 	if len(rec.types) == 0 || rec.types[0] != "coord.plan.ready" {
@@ -185,13 +186,12 @@ func TestL11_007_BoardContractMatchesTUI009(t *testing.T) {
 	}
 	plan := coord.Plan{ID: "p", Todos: []coord.Todo{{ID: "t1", Title: "x", Assignee: "coder", Status: coord.Pending}}}
 	rec := newRecordingSub(bus)
-	defer rec.close()
 	o := coord.NewOrchestrator(coord.Config{Concurrency: 1}, cannedPlanner{plan: plan}, bus, bus, runner)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	_ = o.Run(ctx, plan.Goal)
 	_ = bus.Close()
-	time.Sleep(10 * time.Millisecond)
+	rec.close() // wait for drain to finish before reading rec.types
 
 	// The set of published topics must be a subset of the TUI-009 fold topics.
 	tui009Topics := map[event.Topic]bool{

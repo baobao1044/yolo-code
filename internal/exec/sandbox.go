@@ -38,7 +38,18 @@ type Sandbox struct {
 // NewSandbox builds a Sandbox rooted at root with cwd as the working directory.
 // The composition root uses this so cmd/yolo can wire a real sandbox without
 // reaching into unexported fields (Sprint 12 integration).
+//
+// Both root and cwd are normalized through filepath.EvalSymlinks so that
+// Resolve's later EvalSymlinks call on resolved paths compares like-for-like.
+// Without this, Windows short-name vs long-name mismatches cause false
+// ErrPathEscapes (e.g. C:\Users\ADMIN~1\... vs C:\Users\Admin\...).
 func NewSandbox(root, cwd string) *Sandbox {
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	if real, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = real
+	}
 	return &Sandbox{root: root, cwd: cwd}
 }
 
