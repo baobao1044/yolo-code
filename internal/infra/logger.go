@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // logRedactor redacts secret-bearing values in a slog attribute slice before

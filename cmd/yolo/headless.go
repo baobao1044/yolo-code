@@ -18,15 +18,15 @@ import (
 	"strings"
 	"sync"
 
-	cog "github.com/yolo-code/yolo/internal/cognitive"
-	econtext "github.com/yolo-code/yolo/internal/context"
-	"github.com/yolo-code/yolo/internal/event"
-	execpkg "github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/infra"
-	"github.com/yolo-code/yolo/internal/memory"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
+	cog "github.com/baobao1044/yolo-code/internal/cognitive"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	"github.com/baobao1044/yolo-code/internal/event"
+	execpkg "github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/infra"
+	"github.com/baobao1044/yolo-code/internal/memory"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // runHeadless runs one headless turn against a fresh in-memory store, reading
@@ -109,6 +109,12 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 	}
 
 	d := runtime.Deps{Bus: bus, Session: smgr}
+	// Scope Loop Engineering + Dynamic Workflow: always wire both adapters so
+	// the drive loop consults the scope controller (VERIFY arm) and the workflow
+	// engine (PLAN arm). The buses are nil-safe; tests that inject a fresh bus
+	// share it with these adapters so scope./workflow. events are observable.
+	d.Scope = newScopeAdapter(bus)
+	d.Workflow = newWorkflowAdapter(bus)
 	if deps != nil {
 		d.Context = deps.context
 		d.Prompt = deps.prompt

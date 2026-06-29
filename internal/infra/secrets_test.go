@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestSecretsDefaultPatternsMaskKnownSecrets pins §13.7.1: the default registry

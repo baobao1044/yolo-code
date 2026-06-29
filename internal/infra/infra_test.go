@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // drainBus publishes all events then closes the bus so the subscriber range

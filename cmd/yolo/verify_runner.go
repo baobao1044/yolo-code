@@ -10,8 +10,8 @@ import (
 	osexec "os/exec"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/verify"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/verify"
 )
 
 // verifyRunner shells out to tools (gofmt, go vet, go build, go test) via

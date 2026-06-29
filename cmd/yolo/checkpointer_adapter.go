@@ -13,9 +13,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yolo-code/yolo/internal/patch"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/patch"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // shadowSnap is the shared snapshot storage used by both the patch engine

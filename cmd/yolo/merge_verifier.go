@@ -10,7 +10,7 @@ import (
 	"context"
 	"strings"
 
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
 )
 
 // mergeVerifier is a coord.Verifier that approves any non-empty combined diff.

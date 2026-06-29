@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
 // OpenAICompatProvider streams responses from an OpenAI-compatible
@@ -353,6 +353,14 @@ var toolDefs = map[string]chatTool{
 			Name:        "bash",
 			Description: "Run a shell command in the repository directory. Use for building, testing, running scripts, etc.",
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"the shell command to run"}},"required":["command"]}`),
+		},
+	},
+	"grep": {
+		Type: "function",
+		Function: chatFunction{
+			Name:        "grep",
+			Description: "Search file contents in the repository for a regex pattern. Returns matching lines with file paths and line numbers.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"regex pattern to search for"},"path":{"type":"string","description":"optional directory or file to search in (default: repo root)"}},"required":["pattern"]}`),
 		},
 	},
 }

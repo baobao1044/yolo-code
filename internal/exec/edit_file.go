@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // NewEditFile returns an EditFile tool confined to s.

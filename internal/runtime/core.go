@@ -14,8 +14,8 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // Core is the runtime: it owns the scheduler and the per-task FSM handles,
@@ -24,14 +24,16 @@ type Core struct {
 	bus     *event.Bus
 	session *session.Manager
 
-	ctxBldr ContextBuilder
-	prompt  PromptCompiler
-	cog     CognitiveCore
-	exec    Executor
-	verify  Verifier
-	patch   Patcher
-	restore Restorer
-	memory  MemoryStore
+	ctxBldr  ContextBuilder
+	prompt   PromptCompiler
+	cog      CognitiveCore
+	exec     Executor
+	verify   Verifier
+	patch    Patcher
+	restore  Restorer
+	memory   MemoryStore
+	scope    ScopeController // nil → noopScopeController (no scope control)
+	workflow WorkflowEngine  // nil → noopWorkflowEngine (legacy fixed FSM)
 
 	mu    sync.Mutex // guards tasks map (I1: state itself is single-writer)
 	tasks map[session.TaskID]*taskHandle
@@ -41,19 +43,20 @@ type Core struct {
 // goroutine running drive() touches fsm/lastObs/pendingCalls; the mutex guards
 // the map membership only.
 type taskHandle struct {
-	id        session.TaskID
-	sessionID session.ID
-	fsm       *fsm
-	task      *session.Task
-	pkg       ContextPackage
-	lastObs   Observation
-	ckptName  string             // the patch checkpoint to Restore on a verify failure
-	retries   int                // PATCH→VERIFY→fail cycles; capped to stop a spin
-	pending   []ToolCall         // tool calls the Planner emitted this turn, awaiting EXECUTE
-	approved  bool               // true when the head pending call has been user-approved
-	events    chan userCmd       // user-driven events (approve/reject/pause/resume/cancel)
-	ctx       context.Context    // task-scoped; cancel cascades into drive + ports
-	cancel    context.CancelFunc // attached to the Session Manager
+	id          session.TaskID
+	sessionID   session.ID
+	fsm         *fsm
+	task        *session.Task
+	pkg         ContextPackage
+	lastObs     Observation
+	lastVerdict Verdict            // last verify result; consulted by the Scope Controller
+	ckptName    string             // the patch checkpoint to Restore on a verify failure
+	retries     int                // PATCH→VERIFY→fail cycles; capped to stop a spin
+	pending     []ToolCall         // tool calls the Planner emitted this turn, awaiting EXECUTE
+	approved    bool               // true when the head pending call has been user-approved
+	events      chan userCmd       // user-driven events (approve/reject/pause/resume/cancel)
+	ctx         context.Context    // task-scoped; cancel cascades into drive + ports
+	cancel      context.CancelFunc // attached to the Session Manager
 }
 
 // userCmd is a user action routed from the UI into the runtime's FSM.
@@ -81,6 +84,14 @@ func New(d Deps) *Core {
 	c.patch = orPatch(d.Patch)
 	c.restore = orRestore(d.Restore)
 	c.memory = d.Memory
+	c.scope = &noopScopeController{}
+	if d.Scope != nil {
+		c.scope = d.Scope
+	}
+	c.workflow = &noopWorkflowEngine{}
+	if d.Workflow != nil {
+		c.workflow = d.Workflow
+	}
 	return c
 }
 
@@ -171,6 +182,21 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			c.publishTransition(ctx, h.id, from, to, "context_built")
 
 		case StatePlan:
+			// Dynamic Workflow: consult the workflow engine for the routing
+			// decision given the task goal + the last feedback event (File:
+			// Dynamic Workflow). The engine's action is advisory — it does not
+			// override the FSM, so it is NOT published as a state.change (that
+			// would desync event counts); it primes the workflow state for any
+			// future routing seam. When no engine is wired, the noop engine
+			// returns Submit and this block is a no-op.
+			if c.workflow != nil {
+				wfState := &WFState{Phase: WFPhase("PLAN"), Retries: h.retries}
+				wfEvent := WFEvent{Kind: WFEventVerifyFail}
+				if h.lastVerdict.Pass {
+					wfEvent.Kind = WFEventVerifyPass
+				}
+				_, _ = c.workflow.Next(h.task.Goal, wfState, wfEvent)
+			}
 			prompt := c.prompt.Compile(h.pkg)
 			turn, err := c.cog.Think(ctx, prompt)
 			if err != nil {
@@ -207,9 +233,9 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 
 		case StateExecute:
 			// Dispatch the next pending tool call (T6/T7). If none remain this turn,
-			// the Planner is done — go back to PLAN for the next turn.
+			// the Planner is done — back to PLAN for the next turn (T21).
 			if len(h.pending) == 0 {
-				from, to, err := h.fsm.transition(SigPlannerAnswer, "turn_done")
+				from, to, err := h.fsm.transition(SigTurnDone, "turn_done")
 				if err != nil {
 					return
 				}
@@ -218,6 +244,15 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			}
 			call := h.pending[0]
 			call.Task = event.TaskID(h.id)
+			// Scope-gated tool access (File: Scope Loop Engineering, W2): when a
+			// scope controller is wired AND it disallows the tool at the current
+			// level, try to BROADEN the scope to a level that permits it before
+			// dispatching (a tool call the Planner emitted is a signal the work
+			// must happen; we don't silently drop it, which would loop forever).
+			// The noop controller allows every tool, so this is a no-op there.
+			if c.scope != nil && !c.scope.CanUseTool(call.Tool) {
+				c.scope.Enter(scopeLevelForTool(call.Tool), "tool requires broader scope")
+			}
 			if c.exec.NeedsApproval(call) && !h.approved {
 				// Wait for human approval before dispatching this call.
 				from, to, err := h.fsm.transition(SigNeedsApproval, "approval")
@@ -270,6 +305,26 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			if err != nil {
 				c.toError(ctx, h, err)
 				return
+			}
+			h.lastVerdict = verdict
+			// Scope Loop Engineering: consult the scope controller to widen or
+			// narrow the search scope based on this verdict (File: Scope Loop
+			// Engineering, W3). On a fail, the controller may suggest expanding
+			// (e.g. a missing import → repo scope) or contracting (re-examine a
+			// narrower scope). When a wired controller suggests a move, the
+			// runtime records it so subsequent PLAN turns see the adjusted scope;
+			// the noop stub returns NoOp and this is a no-op. A pass records a
+			// confirmed fact so the scope memory remembers what worked.
+			if c.scope != nil {
+				if verdict.Pass {
+					c.scope.RecordFact("verify passed at " + verdict.Stage)
+				} else {
+					c.scope.RecordFailedHypothesis(verdict.Reason)
+				}
+				tr := c.scope.SuggestTransition(scopeVerdictFrom(verdict))
+				if tr.Action != ScopeActionNoOp && tr.Action != ScopeActionStay {
+					c.scope.Enter(tr.TargetLevel, tr.Reason)
+				}
 			}
 			if !verictPass(verdict) {
 				c.publishVerificationFailed(ctx, h.id, verdict)
@@ -555,6 +610,34 @@ func fullVerifyPolicy() VerifyPolicy {
 // Kept defensive against stubs that set one field.
 func verictPass(v Verdict) bool {
 	return v.Pass || v.Severity == "pass"
+}
+
+// scopeVerdictFrom projects a runtime Verdict into the minimal shape the Scope
+// Controller needs (Pass/Stage/Hint/Reason). The Hint field is the scope
+// controller's primary routing signal (empty = no hint).
+func scopeVerdictFrom(v Verdict) ScopeVerdict {
+	return ScopeVerdict{Pass: v.Pass, Stage: v.Stage, Hint: v.Hint, Reason: v.Reason}
+}
+
+// scopeLevelForTool returns the broadest-but-most-restrictive scope level that
+// permits a tool, mirroring the W2 permission table (File: Scope Loop
+// Engineering). When a tool call the Planner emitted is disallowed at the
+// current level, the runtime broadens to this level before dispatching so the
+// work proceeds instead of looping forever. Unknown tools broaden to LevelRepo
+// (read-mostly exploration) as a safe default.
+func scopeLevelForTool(tool string) ScopeLevel {
+	switch tool {
+	case "list_files", "grep", "read_file":
+		return ScopeLevel(1) // LevelRepo (Task=0, Repo=1, File=2, Function=3, Edit=4, Verify=5)
+	case "view_function", "call_graph":
+		return ScopeLevel(3) // LevelFunction
+	case "edit_file", "write_file":
+		return ScopeLevel(4) // LevelEdit
+	case "run_test", "bash", "git_diff":
+		return ScopeLevel(5) // LevelVerify
+	default:
+		return ScopeLevel(1) // LevelRepo: safe read-mostly default
+	}
 }
 
 // maxVerifyRetries caps PATCH→VERIFY→fail cycles so a broken patch + a

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // newTestManager wires a Manager backed by a fresh file store in a temp dir,

@@ -9,8 +9,8 @@ package tui
 import (
 	"testing"
 
+	"github.com/baobao1044/yolo-code/internal/event"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yolo-code/yolo/internal/event"
 )
 
 // TestBusWatcherEmitsBusMsg pins §14.3.1: a buffered envelope arrives on the

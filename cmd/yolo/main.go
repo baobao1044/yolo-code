@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
 )
 
 func main() {
@@ -27,10 +27,23 @@ func main() {
 // print the event transcript). Sprint 13 adds `--plan <goal>` which uses the
 // multi-agent orchestrator for complex goals and falls back to the headless
 // path for simple (Single-mode) goals.
+//
+// Configuration precedence (highest to lowest): CLI flags > environment vars >
+// `.env` file. `.env` is loaded first (LoadDotEnv never overrides an already-set
+// env var), then flags override the environment via os.Setenv so the existing
+// provider resolution — which reads YOLO_* env vars — picks them up unchanged.
 func run(args []string) error {
+	// Load .env from the current directory before anything reads env config.
+	// Missing file is a no-op; shell env and flags take precedence.
+	_ = LoadDotEnv(".env")
+
 	headless := false
 	var planGoal string
 	var plan bool
+	// Optional CLI overrides for the LLM provider + repo root. Empty means
+	// "use the environment". We apply them to the environment before resolving
+	// the provider so cognitive.OpenAICompatProviderFromEnv sees them.
+	var flagModel, flagBaseURL, flagRepo string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch a {
@@ -43,10 +56,41 @@ func run(args []string) error {
 			plan = true
 			planGoal = args[i+1]
 			i++
+		case "--model":
+			if i+1 >= len(args) {
+				return errors.New("--model requires a value argument")
+			}
+			flagModel = args[i+1]
+			i++
+		case "--base-url":
+			if i+1 >= len(args) {
+				return errors.New("--base-url requires a value argument")
+			}
+			flagBaseURL = args[i+1]
+			i++
+		case "--repo":
+			if i+1 >= len(args) {
+				return errors.New("--repo requires a path argument")
+			}
+			flagRepo = args[i+1]
+			i++
 		case "--version":
 			fmt.Println(version)
 			return nil
 		}
+	}
+
+	// Apply flag overrides into the environment so downstream provider
+	// resolution (which reads YOLO_MODEL / YOLO_BASE_URL / YOLO_REPO_ROOT)
+	// picks them up without each adapter plumbing the values separately.
+	if flagModel != "" {
+		_ = os.Setenv("YOLO_MODEL", flagModel)
+	}
+	if flagBaseURL != "" {
+		_ = os.Setenv("YOLO_BASE_URL", flagBaseURL)
+	}
+	if flagRepo != "" {
+		_ = os.Setenv("YOLO_REPO_ROOT", flagRepo)
 	}
 
 	if plan {

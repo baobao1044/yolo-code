@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // exitRunner is an AgentRunner that publishes canned events per role. The

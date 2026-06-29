@@ -21,7 +21,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/patch"
+	"github.com/baobao1044/yolo-code/internal/patch"
 )
 
 // Runner shells out to a tool (gofmt, go vet, go build, go test) scoped to the

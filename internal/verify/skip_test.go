@@ -13,7 +13,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // stageStatus builds a {stage: status} map from the collected advisories so a

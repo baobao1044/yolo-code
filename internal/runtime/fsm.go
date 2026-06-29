@@ -1,6 +1,6 @@
 // Package runtime implements Layer 2 — the finite state machine that decides
 // where the agent is at every instant (File 04). This file owns the FSM
-// itself: the 13 states, the 20-entry transition table (§4.2), the invariants
+// itself: the 13 states, the 21-entry transition table (§4.2), the invariants
 // (§4.2.1), and the transition guard. The drive loop (§4.3) is layered on top
 // in drive.go.
 //
@@ -59,6 +59,7 @@ const (
 	SigPlannerToolCall  Signal = "planner_tool_call"
 	SigNeedsApproval    Signal = "needs_approval"
 	SigDispatched       Signal = "dispatched"
+	SigTurnDone         Signal = "turn_done"
 	SigUserApprove      Signal = "user_approve"
 	SigUserReject       Signal = "user_reject"
 	SigObservation      Signal = "observation"
@@ -82,7 +83,7 @@ type edge struct {
 	To     State
 }
 
-// transitionTable returns the complete T1–T20 transition table (File 04 §4.2).
+// transitionTable returns the complete T1–T21 transition table (File 04 §4.2).
 // Order does not matter for dispatch (lookup matches by key), but the table is
 // written in spec order for readability.
 func transitionTable() []edge {
@@ -107,6 +108,7 @@ func transitionTable() []edge {
 		{StateAny, SigUserCancel, StateCancelled},              // T18
 		{StateAny, SigHardError, StateError},                   // T19
 		{StateError, SigUserAckError, StateInit},               // T20
+		{StateExecute, SigTurnDone, StatePlan},                 // T21
 	}
 }
 

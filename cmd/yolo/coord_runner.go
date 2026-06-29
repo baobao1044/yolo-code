@@ -12,14 +12,14 @@ import (
 	"os"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/cognitive"
-	econtext "github.com/yolo-code/yolo/internal/context"
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/cognitive"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // runtimeAgentRunner implements coord.AgentRunner by spawning real agents. It
@@ -158,6 +158,11 @@ func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context, task event.Ta
 		Verify:    verifyAd,
 		Patch:     patchAd,
 		Restore:   restorer,
+		// Scope Loop Engineering + Dynamic Workflow: each per-todo Core gets its
+		// own scope controller + workflow engine on the shared coord bus so
+		// scope./workflow. events are observable alongside coord.> events.
+		Scope:    newScopeAdapter(r.bus),
+		Workflow: newWorkflowAdapter(r.bus),
 	}
 	return d, nil
 }

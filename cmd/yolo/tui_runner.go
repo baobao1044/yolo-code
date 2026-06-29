@@ -9,11 +9,11 @@ import (
 	"os"
 	"sync/atomic"
 
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
-	"github.com/yolo-code/yolo/internal/tui"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
+	"github.com/baobao1044/yolo-code/internal/tui"
 )
 
 // runTUI starts the interactive Bubble Tea TUI wired to a real runtime.Core

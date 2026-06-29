@@ -10,7 +10,7 @@ package runtime
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // noopContextBuilder returns an empty context package.
@@ -79,3 +79,30 @@ func (noopPatcher) Apply(context.Context, PatchOp) (PatchResult, error) {
 type noopRestorer struct{}
 
 func (noopRestorer) Restore(context.Context, session.TaskID, string) error { return nil }
+
+// noopScopeController is the disabled-scope stub: every tool is allowed, it
+// never suggests a transition, and recorders are no-ops. New uses this when
+// Deps.Scope is nil, so the drive loop's optional scope-control calls are
+// safe but inert — preserving the pre-scope behaviour.
+type noopScopeController struct{}
+
+func (noopScopeController) Current() ScopeLevel      { return ScopeLevel(0) }
+func (noopScopeController) Enter(ScopeLevel, string) {}
+func (noopScopeController) Exit() ScopeLevel         { return ScopeLevel(0) }
+func (noopScopeController) CanUseTool(string) bool   { return true }
+func (noopScopeController) SuggestTransition(ScopeVerdict) ScopeTransition {
+	return ScopeTransition{Action: ScopeActionNoOp}
+}
+func (noopScopeController) RecordFact(string)             {}
+func (noopScopeController) RecordFailedHypothesis(string) {}
+func (noopScopeController) RecordPatch(int, string, bool) {}
+
+// noopWorkflowEngine returns a submit action immediately: when no dynamic
+// workflow is wired, the runtime relies on its fixed FSM flow and the engine
+// never overrides a routing decision. Next returns WFActionSubmit so any caller
+// that consults it falls through to the legacy path.
+type noopWorkflowEngine struct{}
+
+func (noopWorkflowEngine) Next(string, *WFState, WFEvent) (WFAction, error) {
+	return WFAction{Kind: WFActionSubmit, Note: "no workflow engine wired"}, nil
+}

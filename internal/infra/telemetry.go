@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // SpanStatus is the outcome of a span: unset, OK, or Error (mirrors OTel codes).

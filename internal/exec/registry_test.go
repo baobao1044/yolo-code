@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // fakeTool is a minimal Tool the registry tests assemble inline to exercise

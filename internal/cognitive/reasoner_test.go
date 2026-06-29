@@ -3,7 +3,7 @@ package cognitive
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestEmitToolCallsPublishesOneEventPerCall is the L6-004 exit criterion: a

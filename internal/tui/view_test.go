@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/baobao1044/yolo-code/internal/event"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/yolo-code/yolo/internal/event"
 )
 
 // TestViewFallbackBeforeResize pins the cold-start behavior: before the first

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // TestTUIDriverSingleGoal wires a real runtime.Core and checks that a

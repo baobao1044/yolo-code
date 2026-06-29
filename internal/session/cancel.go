@@ -17,7 +17,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // Pause halts a running task at a safe boundary and marks it PAUSED. The task

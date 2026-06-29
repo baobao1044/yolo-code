@@ -13,7 +13,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestFoldStateChangeUpdatesState is the §14.7.4 core invariant: state.change

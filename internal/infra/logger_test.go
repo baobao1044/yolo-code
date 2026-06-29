@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // captureLogger builds a logger writing to a buffer (instead of os.Stderr) so

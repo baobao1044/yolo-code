@@ -13,8 +13,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // ContextPackage is the assembled, budgeted context the Context Engine (File 06)
@@ -67,12 +67,16 @@ type VerifyPolicy struct {
 
 // Verdict is the verification pipeline's result (File 09). Pass is false iff a
 // stage failed; Stage names the failing stage; Severity is "pass"/"warn"/"fail";
-// Reason is the one-line summary the runtime/Reflection reads.
+// Reason is the one-line summary the runtime/Reflection reads. Hint is an
+// optional short classifier the Scope Controller uses to decide whether to
+// expand/contract the search scope (e.g. "missing_import" → widen to repo
+// scope). Empty Hint means "no hint".
 type Verdict struct {
 	Pass     bool
 	Stage    string
 	Severity string
 	Reason   string
+	Hint     string
 }
 
 // ReflectionDecision is the Cognitive Core's answer to a verify failure (File 07
@@ -174,9 +178,132 @@ type MemoryStore interface {
 	Update(ctx context.Context, taskID session.TaskID) error
 }
 
+// --- Scope Loop Engineering ports (sibling package internal/scope) ---
+//
+// The runtime may not import internal/scope (import matrix File 15 §15.15.2),
+// so the scope controller is a port here with runtime-local mirror types. The
+// composition root (cmd/yolo) wires an adapter that translates between these
+// and the real scope.* types. A nil Scope port means "no scope control" — the
+// drive loop falls back to its pre-scope behaviour (see drive.go StateVerify).
+
+// ScopeLevel mirrors scope.Level: the granularity of the current search scope.
+// It is an int so the runtime can compare/transition without importing scope.
+type ScopeLevel int
+
+// ScopeVerdict is the minimal verdict shape the Scope Controller needs to
+// suggest an expansion/contraction. It mirrors scope.Verdict (Pass/Stage/Hint).
+type ScopeVerdict struct {
+	Pass   bool
+	Stage  string
+	Hint   string
+	Reason string
+}
+
+// ScopeAction is what the Scope Controller wants the runtime to do with the
+// scope (stay / expand / contract). It mirrors scope.Action.
+type ScopeAction int
+
+const (
+	ScopeActionNoOp     ScopeAction = iota // stay
+	ScopeActionExpand                      // widen the search scope
+	ScopeActionContract                    // narrow the search scope
+	ScopeActionStay                        // stay in scope, repair
+)
+
+// ScopeTransition is a suggested scope move: the target level + the action +
+// a human-readable reason. Mirrors scope.Transition.
+type ScopeTransition struct {
+	TargetLevel ScopeLevel
+	Action      ScopeAction
+	Reason      string
+}
+
+// ScopeController owns the per-task scope state machine (File: Scope Loop
+// Engineering). The runtime consults it in the VERIFY arm to decide whether to
+// widen or narrow the search scope on a failure, and gates tool access by the
+// current level. All methods are best-effort and MUST be safe to call from the
+// drive goroutine (the scope controller owns no goroutine).
+type ScopeController interface {
+	Current() ScopeLevel
+	Enter(level ScopeLevel, reason string)
+	Exit() ScopeLevel
+	CanUseTool(tool string) bool
+	SuggestTransition(v ScopeVerdict) ScopeTransition
+	RecordFact(fact string)
+	RecordFailedHypothesis(h string)
+	RecordPatch(seq int, summary string, accepted bool)
+}
+
+// --- Dynamic Workflow ports (sibling package internal/workflow) ---
+//
+// The runtime may not import internal/workflow; the workflow engine is a port
+// here with runtime-local mirror types. A nil Workflow port means "use the
+// legacy fixed FSM flow" — the drive loop behaves exactly as before.
+
+// WFPhase names a phase within a dynamic workflow (e.g. "LOCALIZE", "REPAIR").
+type WFPhase string
+
+// WFState is the runtime's view of a workflow's progress. It mirrors
+// workflow.State (Phase + hypothesis/candidate counters).
+type WFState struct {
+	Phase      WFPhase
+	Hypotheses []string
+	Candidates int
+	Retries    int
+}
+
+// WFEventKind names a workflow event the runtime emits to the engine (e.g. a
+// verify pass/fail, a context-needed signal, a timeout).
+type WFEventKind int
+
+const (
+	WFEventVerifyPass WFEventKind = iota
+	WFEventVerifyFail
+	WFEventContextNeeded
+	WFEventTimeout
+)
+
+// WFEvent is a single workflow event handed to the engine.
+type WFEvent struct {
+	Kind    WFEventKind
+	Payload string
+}
+
+// WFActionKind names a workflow action the engine returns for the runtime to
+// perform (localize, generate a patch, run multi-hypothesis, verify, repair,
+// contract scope, submit, degrade the model).
+type WFActionKind int
+
+const (
+	WFActionLocalize WFActionKind = iota
+	WFActionGenerate
+	WFActionMultiHyp
+	WFActionVerify
+	WFActionRepair
+	WFActionContract
+	WFActionSubmit
+	WFActionDegrade
+)
+
+// WFAction is a workflow action the engine wants the runtime to take.
+type WFAction struct {
+	Kind WFActionKind
+	Note string
+}
+
+// WorkflowEngine selects and drives a dynamic workflow per task (File: Dynamic
+// Workflow). The runtime calls Next in the PLAN/VERIFY arms to route based on
+// the task type and recent feedback. A nil engine means "no dynamic workflow"
+// — the legacy fixed FSM flow applies.
+type WorkflowEngine interface {
+	Next(goal string, state *WFState, ev WFEvent) (WFAction, error)
+}
+
 // Deps are the runtime's collaborators (File 04 §4.6). Bus and Session are
 // required; the rest default to no-op stubs (wireDeps fills them) so a Sprint 1
-// stubbed single-turn loop builds with only event+session present.
+// stubbed single-turn loop builds with only event+session present. Scope and
+// Workflow are optional — a nil value disables scope control / dynamic
+// workflow and the runtime falls back to its legacy fixed FSM flow.
 type Deps struct {
 	Bus       *event.Bus
 	Session   *session.Manager
@@ -188,4 +315,6 @@ type Deps struct {
 	Patch     Patcher
 	Restore   Restorer
 	Memory    MemoryStore
+	Scope     ScopeController // optional; nil → no scope control
+	Workflow  WorkflowEngine  // optional; nil → legacy fixed FSM flow
 }

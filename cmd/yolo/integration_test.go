@@ -14,11 +14,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/cognitive"
-	econtext "github.com/yolo-code/yolo/internal/context"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/cognitive"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
 // TestRegressionPatchVerifyFailRollsBack drives a real headless run through

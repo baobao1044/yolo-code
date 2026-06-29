@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/infra"
-	"github.com/yolo-code/yolo/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/infra"
+	"github.com/baobao1044/yolo-code/internal/runtime"
 )
 
 // TestHeadlessWithInfraObservesRun is the Sprint 8 exit bar: a headless run

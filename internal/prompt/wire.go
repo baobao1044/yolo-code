@@ -26,7 +26,7 @@ package prompt
 import (
 	"strings"
 
-	econtext "github.com/yolo-code/yolo/internal/context"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
 )
 
 // render wraps a group of parts in its stable section tag. Parts within a group

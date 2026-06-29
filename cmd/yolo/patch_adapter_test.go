@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/runtime"
 )
 
 func TestPatchAdapterAppliesBlocksAndRestores(t *testing.T) {

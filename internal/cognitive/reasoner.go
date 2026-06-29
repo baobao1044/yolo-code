@@ -11,8 +11,8 @@ package cognitive
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // EmitToolCalls publishes one tool.call event per tool call in the turn (File

@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/coord"
+	"github.com/baobao1044/yolo-code/internal/coord"
 )
 
 // heuristicPlanner implements coord.Planner. It is stateful only to mint

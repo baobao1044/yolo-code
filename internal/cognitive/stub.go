@@ -18,7 +18,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
 // StubProvider is the golden-test provider: same Request → same []Chunk, every

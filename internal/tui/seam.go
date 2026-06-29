@@ -13,7 +13,7 @@ package tui
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // Subscribable is the bus-seam the TUI reads events from. *event.Bus satisfies

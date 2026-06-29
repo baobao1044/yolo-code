@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestCoalesceNoDeltasDropped pins §14.9.3: a burst of 200 llm.token deltas

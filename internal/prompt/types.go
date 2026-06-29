@@ -15,8 +15,8 @@
 package prompt
 
 import (
-	econtext "github.com/yolo-code/yolo/internal/context"
-	"github.com/yolo-code/yolo/internal/event"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // Message is one element of the compiled prompt the Cognitive Core (Layer 6)

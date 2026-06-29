@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
 )
 
 func TestPlanRunnerEmitsTranscript(t *testing.T) {

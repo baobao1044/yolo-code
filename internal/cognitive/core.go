@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // Core is the Cognitive Core (File 07 §7.7). The provider streams responses;

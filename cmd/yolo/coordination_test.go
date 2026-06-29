@@ -26,8 +26,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/coord"
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/coord"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // recordingSub subscribes coord.> and records every event type in arrival

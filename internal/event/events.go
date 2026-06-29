@@ -398,3 +398,48 @@ type CostIncurredEvent struct {
 
 func (e *CostIncurredEvent) Type() Topic      { return "cost.incurred" }
 func (e *CostIncurredEvent) CausalID() TaskID { return e.Task }
+
+// --- L-scope: Scope (File 15) ---
+
+// ScopeEnterEvent is published by the scope controller whenever it enters a new
+// level (File 15 §15.x). Task is the causal id; Level and Reason carry the
+// human-readable move. The struct lives in package event (not scope) so the
+// durability catalog can reconstruct it on replay without an import cycle.
+type ScopeEnterEvent struct {
+	Task   string `json:"task"`
+	Level  string `json:"level"`
+	Reason string `json:"reason"`
+}
+
+func (e *ScopeEnterEvent) Type() Topic      { return "scope.enter" }
+func (e *ScopeEnterEvent) CausalID() TaskID { return TaskID(e.Task) }
+
+// ScopeTransitionEvent is published when the controller applies a W3
+// expansion/contraction: the from/to levels, the action, and the reason.
+type ScopeTransitionEvent struct {
+	Task      string `json:"task"`
+	FromLevel string `json:"from_level"`
+	ToLevel   string `json:"to_level"`
+	Action    string `json:"action"`
+	Reason    string `json:"reason"`
+}
+
+func (e *ScopeTransitionEvent) Type() Topic      { return "scope.transition" }
+func (e *ScopeTransitionEvent) CausalID() TaskID { return TaskID(e.Task) }
+
+// --- L-workflow: Dynamic Workflow (File 15 §15.15.2) ---
+
+// WorkflowSelectedEvent is published by the workflow engine whenever it selects a
+// workflow for a goal (File 15 §15.x). Task is the causal id (empty today; the
+// runtime threads the real id when it owns the engine), Goal is the classified
+// goal, and Workflow is the chosen workflow's Name() (e.g. "bugfix"). The struct
+// lives in package event (not workflow) so the durability catalog can reconstruct
+// it on replay without an import cycle — the same cycle-avoidance scope uses.
+type WorkflowSelectedEvent struct {
+	Task     string `json:"task"`
+	Goal     string `json:"goal"`
+	Workflow string `json:"workflow"`
+}
+
+func (e *WorkflowSelectedEvent) Type() Topic      { return "workflow.selected" }
+func (e *WorkflowSelectedEvent) CausalID() TaskID { return TaskID(e.Task) }

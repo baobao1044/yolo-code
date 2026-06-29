@@ -16,7 +16,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // Subscribable is the bus subscription seam. *event.Bus satisfies it.

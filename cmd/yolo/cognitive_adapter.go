@@ -9,11 +9,11 @@ package main
 import (
 	"context"
 
-	cog "github.com/yolo-code/yolo/internal/cognitive"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
+	cog "github.com/baobao1044/yolo-code/internal/cognitive"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // cognitiveAdapter implements runtime.CognitiveCore using cognitive.Core.

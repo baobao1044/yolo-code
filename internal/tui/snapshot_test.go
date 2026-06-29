@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestS1ColdStartBudget measures the very first TUI fold path (cold) and the
