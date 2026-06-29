@@ -20,6 +20,30 @@ import (
 // work happens in fold/handleInput/tick (later tickets), which are pure.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// Approval mode only answers y/n; all other keystrokes are ignored.
+		if m.approval != nil {
+			return handleInput(m, msg)
+		}
+
+		s := msg.String()
+		switch s {
+		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r":
+			return handleInput(m, msg)
+		case "backspace":
+			if len(m.inputText) > 0 {
+				r := []rune(m.inputText)
+				m.inputText = string(r[:len(r)-1])
+			}
+			return m, nil
+		default:
+			// Treat single printable runes as typed input. The production path
+			// could use bubbles/textinput; this is enough to drive submit.
+			if len(s) == 1 && s[0] >= ' ' && s[0] <= '~' {
+				m.inputText += s
+			}
+			return m, nil
+		}
 	case busMsg:
 		// A bus event folds into render state + re-launches the watcher. TUI-007
 		// coalesces the repaint: fold accumulates every delta, and the 60 Hz

@@ -50,8 +50,16 @@ type taskHandle struct {
 	ckptName  string             // the patch checkpoint to Restore on a verify failure
 	retries   int                // PATCH→VERIFY→fail cycles; capped to stop a spin
 	pending   []ToolCall         // tool calls the Planner emitted this turn, awaiting EXECUTE
+	approved  bool               // true when the head pending call has been user-approved
+	events    chan userCmd       // user-driven events (approve/reject/pause/resume/cancel)
 	ctx       context.Context    // task-scoped; cancel cascades into drive + ports
 	cancel    context.CancelFunc // attached to the Session Manager
+}
+
+// userCmd is a user action routed from the UI into the runtime's FSM.
+type userCmd struct {
+	kind   string
+	taskID session.TaskID
 }
 
 // New wires a Core from Deps, filling absent ports with no-op stubs so the
@@ -61,6 +69,9 @@ func New(d Deps) *Core {
 		bus:     d.Bus,
 		session: d.Session,
 		tasks:   make(map[session.TaskID]*taskHandle),
+	}
+	if c.bus != nil {
+		go c.userEventLoop()
 	}
 	c.ctxBldr = orContext(d.Context, noopContextBuilder{})
 	c.prompt = orPrompt(d.Prompt, noopPromptCompiler{})
@@ -101,6 +112,7 @@ func (c *Core) Submit(ctx context.Context, sid session.ID, goal string) (session
 		sessionID: sid,
 		fsm:       newFSM(StateInit),
 		task:      task,
+		events:    make(chan userCmd, 16),
 		ctx:       taskCtx,
 		cancel:    taskCancel,
 	}
@@ -122,6 +134,11 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			c.handleCancel(h)
 			return
 		}
+
+		// Drain any user-driven command (approval/pause/resume/cancel) before
+		// handling the next state. WAIT_USER and PAUSED block on this channel
+		// instead of spinning.
+		c.drainUserEvents(ctx, h)
 
 		switch h.fsm.current() {
 
@@ -201,7 +218,8 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			}
 			call := h.pending[0]
 			call.Task = event.TaskID(h.id)
-			if c.exec.NeedsApproval(call) {
+			if c.exec.NeedsApproval(call) && !h.approved {
+				// Wait for human approval before dispatching this call.
 				from, to, err := h.fsm.transition(SigNeedsApproval, "approval")
 				if err != nil {
 					return
@@ -209,6 +227,9 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 				c.publishTransition(ctx, h.id, from, to, "approval")
 				continue
 			}
+			// Either no approval needed or the user already approved. Reset the
+			// flag after dispatching so the next tool is re-evaluated.
+			h.approved = false
 			obs, err := c.exec.Dispatch(ctx, call)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -351,14 +372,121 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			// terminal state without an early return; stop.
 			return
 
+		case StateWaitUser, StatePaused:
+			// Block until the user issues a command. If the command is not valid
+			// for this state (e.g. pause while paused), it is dropped and we
+			// remain blocked.
+			cmd, ok := <-h.events
+			if !ok {
+				return
+			}
+			c.applyUserCmd(ctx, h, cmd)
+
 		default:
 			// States requiring real layers (EXECUTE/WAIT_TOOL/VERIFY/PATCH/
-			// WAIT_USER/PAUSED/ERROR) are not driven in Sprint 1's stubbed loop.
-			// Hitting one means a stub was wired that advanced past PLAN; stop
-			// rather than spin, and surface it as an error transition.
+			// ERROR) are not driven in Sprint 1's stubbed loop. Hitting one
+			// means a stub was wired that advanced past PLAN; stop rather than
+			// spin, and surface it as an error transition.
 			c.toError(ctx, h, errUnimplementedState{state: h.fsm.current()})
 			return
 		}
+	}
+}
+
+// drainUserEvents consumes any queued user commands for this task from the
+// event channel. It is non-blocking so normal states only react when a
+// command has already arrived.
+func (c *Core) drainUserEvents(ctx context.Context, h *taskHandle) {
+	select {
+	case cmd := <-h.events:
+		c.applyUserCmd(ctx, h, cmd)
+	default:
+	}
+}
+
+// applyUserCmd translates a user command into the matching FSM signal.
+func (c *Core) applyUserCmd(ctx context.Context, h *taskHandle, cmd userCmd) {
+	if cmd.taskID != "" && cmd.taskID != h.id {
+		return
+	}
+	sig := Signal("")
+	switch cmd.kind {
+	case "approve":
+		sig = SigUserApprove
+	case "reject":
+		sig = SigUserReject
+	case "pause":
+		sig = SigUserPause
+	case "resume":
+		sig = SigUserResume
+	case "cancel":
+		sig = SigUserCancel
+	default:
+		return
+	}
+	from, to, err := h.fsm.transition(sig, cmd.kind)
+	if err != nil {
+		// Command doesn't apply to current state (e.g. approve when not in
+		// WAIT_USER). Drop it.
+		return
+	}
+	// Use a background context for the transition event so that cancelling the
+	// task context doesn't race with fan-out to state.change subscribers.
+	pubCtx := context.Background()
+	c.publishTransition(pubCtx, h.id, from, to, cmd.kind)
+	if sig == SigUserApprove {
+		h.approved = true
+	}
+	if sig == SigUserReject || sig == SigUserCancel {
+		_ = c.session.Cancel(pubCtx, h.id, "user")
+	}
+}
+
+// userEventLoop subscribes to user.* events on the bus and routes them to the
+// active task's command channel. It runs for the lifetime of the Core.
+func (c *Core) userEventLoop() {
+	ch := c.bus.Subscribe(
+		event.Topic("user.approve"),
+		event.Topic("user.reject"),
+		event.Topic("user.pause"),
+		event.Topic("user.resume"),
+		event.Topic("user.cancel"),
+	)
+	for env := range ch {
+		switch e := env.Evt.(type) {
+		case *event.UserApproveEvent:
+			tid := session.TaskID(e.Task)
+			c.sendUserCmd(tid, userCmd{kind: "approve", taskID: tid})
+		case *event.UserRejectEvent:
+			tid := session.TaskID(e.Task)
+			c.sendUserCmd(tid, userCmd{kind: "reject", taskID: tid})
+		case *event.UserPauseEvent:
+			tid := session.TaskID(string(e.Task))
+			c.sendUserCmd(tid, userCmd{kind: "pause", taskID: tid})
+		case *event.UserResumeEvent:
+			tid := session.TaskID(string(e.Task))
+			c.sendUserCmd(tid, userCmd{kind: "resume", taskID: tid})
+		case *event.UserCancelEvent:
+			tid := session.TaskID(string(e.Task))
+			// Cancel immediately cascades context cancellation so long-running
+			// tools stop, even if the drive loop is blocked in a port call.
+			_ = c.session.Cancel(context.Background(), tid, "user")
+			c.sendUserCmd(tid, userCmd{kind: "cancel", taskID: tid})
+		}
+	}
+}
+
+// sendUserCmd delivers a user command to a task's channel if it exists.
+func (c *Core) sendUserCmd(tid session.TaskID, cmd userCmd) {
+	c.mu.Lock()
+	h, ok := c.tasks[tid]
+	c.mu.Unlock()
+	if !ok || h.events == nil {
+		return
+	}
+	select {
+	case h.events <- cmd:
+	default:
 	}
 }
 

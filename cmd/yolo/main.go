@@ -71,12 +71,7 @@ func run(args []string) error {
 	}
 
 	if !headless {
-		// TUI is built (Sprint 9) but interactive wiring lands in the integration
-		// sprint (the runtime doesn't subscribe to user.* yet — see Sprint 9
-		// spec Decision 4). Until then the interactive path can't drive the
-		// runtime, so keep the hint pointing at --headless or --plan.
-		fmt.Fprintln(os.Stderr, "yolo: interactive TUI pending integration wiring — use `yolo --headless` or `yolo --plan <goal>`")
-		return nil
+		return runTUI(context.Background())
 	}
 	out, err := runHeadlessCtx(context.Background(), os.Stdin, 0)
 	if err != nil {
