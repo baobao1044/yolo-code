@@ -57,6 +57,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return tick(m)
 	case quitMsg:
 		return m, tea.Quit
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+		return m, nil
 	}
 	return m, nil
 }
@@ -66,19 +71,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // pane, status bar, diff viewer, cost rail, and board. The full layout lands
 // incrementally so each ticket's View is testable in isolation.
 func (m Model) View() string {
-	// Minimal header for TUI-001 (File 14 §14.7.1 header): task + goal + state.
-	// The lipgloss layout (rail, borders) is added in later tickets.
-	if m.taskID == "" {
-		return "yolo — awaiting task"
-	}
-	out := "task " + m.taskID
-	if m.goal != "" {
-		out += " · " + m.goal
-	}
-	if m.state != "" {
-		out += "  " + m.state
-	}
-	return out
+	// The full lipgloss layout lives in view.go (TUI-010).
+	return View(m)
 }
 
 // Run is the TUI entry point (File 14 §14.11): subscribe the rendering topics,

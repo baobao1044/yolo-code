@@ -79,6 +79,7 @@ type Model struct {
 	// layout
 	width, height int
 	focus         pane
+	ready         bool
 
 	// task header (TUI-001)
 	taskID string
