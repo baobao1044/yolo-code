@@ -248,14 +248,14 @@ func (c *Core) drive(ctx context.Context, h *taskHandle, sess *session.Session) 
 			c.publishTransition(ctx, h.id, from, to, "dispatched")
 
 		case StateWaitTool:
-				// The observation is in (T10) → drive VERIFY. If more pending tools
-				// remain this turn, the verify still runs once per turn (the patch's
-				// effect is what's checked); a multi-tool turn dispatches the rest in
-				// the next EXECUTE.
-				// Feed the tool result into the cognitive core's conversation history
-				// so the next Think() sees it (multi-turn agent loop).
-				c.cog.RecordToolResult(h.lastObs.Tool, h.lastObs.Stdout)
-				c.publishObservation(ctx, h.id, h.lastObs)
+			// The observation is in (T10) → drive VERIFY. If more pending tools
+			// remain this turn, the verify still runs once per turn (the patch's
+			// effect is what's checked); a multi-tool turn dispatches the rest in
+			// the next EXECUTE.
+			// Feed the tool result into the cognitive core's conversation history
+			// so the next Think() sees it (multi-turn agent loop).
+			c.cog.RecordToolResult(h.lastObs.Tool, h.lastObs.Stdout)
+			c.publishObservation(ctx, h.id, h.lastObs)
 			from, to, err := h.fsm.transition(SigObservation, "observation")
 			if err != nil {
 				return

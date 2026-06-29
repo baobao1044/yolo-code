@@ -25,8 +25,8 @@ import (
 type Core struct {
 	provider Provider
 	bus      *event.Bus
-	tools    []string        // tool names the Planner may emit (passed to the provider for native tool calling)
-	lastTurn Turn            // most recent Think result; HasMore consults this
+	tools    []string         // tool names the Planner may emit (passed to the provider for native tool calling)
+	lastTurn Turn             // most recent Think result; HasMore consults this
 	history  []prompt.Message // accumulated conversation across turns (tool calls + results)
 }
 

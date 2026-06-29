@@ -5,31 +5,31 @@
 ### Branch naming
 
 ```
-main branch: master
+Main branch: master
 
-Feature branches:  feature/ten-tinh-nang
-Bug fix branches:  fix/ten-bug
-Doc branches:      docs/ten-tai-lieu
+Feature branches:  feature/my-feature
+Bug fix branches:  fix/my-bug
+Doc branches:      docs/my-document
 ```
 
-### Quy trình
+### Process
 
 ```
-1. Tạo branch từ master
+1. Create branch from master
    git checkout -b feature/xyz
 
-2. Phát triển + test locally
+2. Develop + test locally
    make ci
 
 3. Commit (Conventional Commits)
-   git commit -m "feat: thêm tool xyz"
+   git commit -m "feat: add xyz tool"
 
-4. Push lên fork
+4. Push to fork
    git push origin feature/xyz
 
-5. Tạo PR → master
+5. Create PR → master
 
-6. CI chạy tự động
+6. CI runs automatically
 
 7. Review + approve
 
@@ -39,21 +39,21 @@ Doc branches:      docs/ten-tai-lieu
 ### Conventional Commits
 
 ```
-feat:     Tính năng mới
-fix:      Sửa bug
-docs:     Tài liệu
-refactor: Refactor không đổi behaviour
-test:     Thêm/sửa tests
-chore:    Build, deps, v.v.
+feat:     New feature
+fix:      Bug fix
+docs:     Documentation
+refactor: Refactor without behaviour change
+test:     Add/fix tests
+chore:    Build, deps, etc.
 perf:     Performance improvement
 ci:       CI/CD changes
 ```
 
 ## Sprint Cadence
 
-yolo-code phát triển theo sprints (xem `15-Implementation_Roadmap.md`):
+yolo-code is developed in sprints (see `15-Implementation_Roadmap.md`):
 
-| Sprint | Tên | Focus |
+| Sprint | Name | Focus |
 |---|---|---|
 | S1–S3 | Foundation | Session, Runtime FSM, Event Bus |
 | S4–S6 | Cognition | Context Engine, Prompt Compiler, Cognitive Core |
@@ -61,11 +61,11 @@ yolo-code phát triển theo sprints (xem `15-Implementation_Roadmap.md`):
 | S10–S11 | Infrastructure + Hardening | TUI, Sandbox hardening |
 | S12–S13 | Integration + Superpowers | Multi-agent, RAG |
 
-Xem chi tiết tại [Sprint Progress](../progress/sprint-status.md).
+See [Sprint Progress](../progress/sprint-status.md) for details.
 
 ## Testing Strategy
 
-### Pyramids
+### Pyramid
 
 ```
         ┌──────────┐
@@ -80,18 +80,18 @@ Xem chi tiết tại [Sprint Progress](../progress/sprint-status.md).
         └──────────┘
 ```
 
-### Khi nào chạy gì
+### When to run what
 
-| Hoạt động | Chạy |
+| Activity | Run |
 |---|---|
-| Mỗi lần save | `make test` |
-| Trước commit | `make ci` |
-| Trước push/PR | `make ci && make lint` |
-| Trước merge | `make ci && make lint && make test-race` |
+| Every save | `make test` |
+| Before commit | `make ci` |
+| Before push/PR | `make ci && make lint` |
+| Before merge | `make ci && make lint && make test-race` |
 
-### Viết tests
+### Writing tests
 
-**Unit tests**: đặt cùng thư mục với code
+**Unit tests**: place in the same directory as the code
 ```go
 // foo.go
 func Foo() int { return 42 }
@@ -109,7 +109,7 @@ func TestFoo(t *testing.T) {
 //go:build golden
 
 func TestGoldenTranscript(t *testing.T) {
-    // So sánh output với golden file
+    // Compare output against golden file
 }
 ```
 
@@ -118,13 +118,13 @@ func TestGoldenTranscript(t *testing.T) {
 //go:build snapshot
 
 func TestSnapshotBudgets(t *testing.T) {
-    // Kiểm tra performance budgets (S1/S2)
+    // Check performance budgets (S1/S2)
 }
 ```
 
 ## Debugging
 
-### Chạy 1 test cụ thể
+### Run a specific test
 
 ```bash
 go test -run TestFunctionName ./internal/cognitive/...
@@ -139,7 +139,7 @@ go test -v ./internal/cognitive/...
 ### Race detector
 
 ```bash
-# Linux/Mac (cần gcc)
+# Linux/Mac (requires gcc)
 CGO_ENABLED=1 go test -race ./...
 
 # Windows — skip, rely on CI
@@ -151,13 +151,13 @@ go test ./...
 ```bash
 export YOLO_LOG=/tmp/yolo-debug.log
 yolo --headless < task.txt
-# Xem log
+# View log
 cat /tmp/yolo-debug.log
 ```
 
 ### Debug LLM calls
 
-Log bao gồm LLM requests/responses (đã redact API keys). Filter:
+Logs include LLM requests/responses (API keys redacted). Filter:
 
 ```bash
 grep "tool_call" /tmp/yolo-debug.log
@@ -167,19 +167,19 @@ grep "error" /tmp/yolo-debug.log
 
 ## Code Review Checklist
 
-Trước khi approve PR:
+Before approving a PR:
 
-- [ ] `make ci` pass
-- [ ] `make lint` clean
-- [ ] Tests mới cho code mới
-- [ ] No data races (`make test-race` pass)
-- [ ] Documentation cập nhật (nếu cần)
-- [ ] Import matrix tuân thủ (layer chỉ phụ thuộc layer thấp hơn)
-- [ ] Sandbox path cho tool mới (nếu thêm tool)
-- [ ] HITL risk classification hợp lý (nếu thêm tool)
+- [ ] `make ci` passes
+- [ ] `make lint` is clean
+- [ ] New tests for new code
+- [ ] No data races (`make test-race` passes)
+- [ ] Documentation updated (if needed)
+- [ ] Import matrix respected (layers only depend on lower layers)
+- [ ] Sandbox path for new tool (if adding a tool)
+- [ ] HITL risk classification is sensible (if adding a tool)
 
-## Xem thêm
+## See also
 
-- [CI/CD Pipeline](ci-cd.md) — chi tiết CI jobs
-- [CONTRIBUTING.md](../../CONTRIBUTING.md) — hướng dẫn đóng góp đầy đủ
-- [Sprint Progress](../progress/sprint-status.md) — tiến trình sprints
+- [CI/CD Pipeline](ci-cd.md) — CI job details
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) — full contributing guide
+- [Sprint Progress](../progress/sprint-status.md) — sprint progress

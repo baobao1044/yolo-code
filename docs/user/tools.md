@@ -1,19 +1,19 @@
 # Tools Reference
 
-yolo-code có 4 tools tích hợp. Cognitive Core (LLM) gọi tools qua **OpenAI native function calling API**.
+yolo-code has 4 built-in tools. The Cognitive Core (LLM) calls tools via the **OpenAI native function calling API**.
 
-## Tổng quan
+## Overview
 
-| Tool | Args | Risk | Sandbox | Mô tả |
+| Tool | Args | Risk | Sandbox | Description |
 |---|---|---|---|---|
-| `list_files` | — | Low | Có | Liệt kê tất cả files trong repo |
-| `read_file` | `file` | Low | Có | Đọc nội dung file |
-| `edit_file` | `file`, `content` | High | Có | Ghi đè nội dung file (tạo mới nếu chưa có) |
-| `bash` | `command` | Medium–Critical | Có | Chạy shell command |
+| `list_files` | — | Low | Yes | List all files in the repo |
+| `read_file` | `file` | Low | Yes | Read file contents |
+| `edit_file` | `file`, `content` | High | Yes | Overwrite file contents (creates if not exists) |
+| `bash` | `command` | Medium–Critical | Yes | Run a shell command |
 
 ## list_files
 
-Liệt kê tất cả files trong repo root recursively.
+Lists all files in the repo root recursively.
 
 ### Schema
 
@@ -31,12 +31,12 @@ Liệt kê tất cả files trong repo root recursively.
 ### Behaviour
 
 - Walk repo root recursively
-- Tự skip: `.git/`, `node_modules/`, `vendor/`, `__pycache__/`, `.cache/`, `dist/`
-- Trả về relative paths với forward slashes
-- **Risk**: Low — chỉ đọc, không ghi
-- **Cost**: Cheap — chỉ filesystem walk
+- Auto-skip: `.git/`, `node_modules/`, `vendor/`, `__pycache__/`, `.cache/`, `dist/`
+- Returns relative paths with forward slashes
+- **Risk**: Low — read-only, no writes
+- **Cost**: Cheap — only a filesystem walk
 
-### Kết quả ví dụ
+### Example result
 
 ```
 cmd/yolo/main.go
@@ -52,7 +52,7 @@ Makefile
 
 ## read_file
 
-Đọc nội dung file.
+Reads file contents.
 
 ### Schema
 
@@ -64,7 +64,7 @@ Makefile
     "properties": {
       "file": {
         "type": "string",
-        "description": "Đường dẫn file relative to repo root"
+        "description": "File path relative to repo root"
       }
     },
     "required": ["file"]
@@ -74,12 +74,12 @@ Makefile
 
 ### Behaviour
 
-- Giải quyết path qua sandbox (path confinement)
-- Từ chối path escapes (`../../etc/passwd` → `ErrPathEscapes`)
-- **Risk**: Low — chỉ đọc
+- Resolves path through sandbox (path confinement)
+- Rejects path escapes (`../../etc/passwd` → `ErrPathEscapes`)
+- **Risk**: Low — read-only
 - **Cost**: Cheap — 1 file read
 
-### Ví dụ call
+### Example call
 
 ```json
 {
@@ -90,7 +90,7 @@ Makefile
 
 ## edit_file
 
-Ghi đè nội dung file. Tạo file mới nếu chưa tồn tại (tạo parent dirs tự động).
+Overwrites file contents. Creates the file if it doesn't exist (auto-creates parent directories).
 
 ### Schema
 
@@ -102,11 +102,11 @@ Ghi đè nội dung file. Tạo file mới nếu chưa tồn tại (tạo parent
     "properties": {
       "file": {
         "type": "string",
-        "description": "Đường dẫn file relative to repo root"
+        "description": "File path relative to repo root"
       },
       "content": {
         "type": "string",
-        "description": "Nội dung đầy đủ của file"
+        "description": "Full file contents"
       }
     },
     "required": ["file", "content"]
@@ -116,13 +116,13 @@ Ghi đè nội dung file. Tạo file mới nếu chưa tồn tại (tạo parent
 
 ### Behaviour
 
-- Giải quyết path qua sandbox
-- Tạo parent directories nếu chưa có
-- Ghi đè toàn bộ file (không phải partial edit)
-- **Risk**: High — sửa/xoá nội dung file
-- **Cost**: Expensive — cần HITL approval
+- Resolves path through sandbox
+- Creates parent directories if needed
+- Overwrites the entire file (not a partial edit)
+- **Risk**: High — modifies/deletes file contents
+- **Cost**: Expensive — requires HITL approval
 
-### Ví dụ call
+### Example call
 
 ```json
 {
@@ -136,7 +136,7 @@ Ghi đè nội dung file. Tạo file mới nếu chưa tồn tại (tạo parent
 
 ## bash
 
-Chạy shell command.
+Runs a shell command.
 
 ### Schema
 
@@ -148,7 +148,7 @@ Chạy shell command.
     "properties": {
       "command": {
         "type": "string",
-        "description": "Shell command để chạy"
+        "description": "Shell command to run"
       }
     },
     "required": ["command"]
@@ -158,16 +158,16 @@ Chạy shell command.
 
 ### Behaviour
 
-- Sandbox phân loại risk dựa trên command:
-  - **Low**: `ls`, `go test`, `go build`, `git status`, v.v.
+- Sandbox classifies risk based on the command:
+  - **Low**: `ls`, `go test`, `go build`, `git status`, etc.
   - **Medium**: Unknown commands (default)
   - **High**: `curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`, network commands
-  - **Critical**: `eval`, `source`, shell escapes (`$(...)`, backticks), `bash -c 'rm -rf /'`, v.v.
+  - **Critical**: `eval`, `source`, shell escapes (`$(...)`, backticks), `bash -c 'rm -rf /'`, etc.
 - Wrapper peeling: `sudo rm -rf /` → peel `sudo` → `rm -rf /` → Critical
-- **Risk**: Medium–Critical (phụ thuộc command)
-- **Cost**: Expensive — cần HITL approval (trừ Low risk)
+- **Risk**: Medium–Critical (depends on command)
+- **Cost**: Expensive — requires HITL approval (except Low risk)
 
-### Ví dụ call
+### Example call
 
 ```json
 {
@@ -179,43 +179,43 @@ Chạy shell command.
 ## HITL Approval Flow
 
 ```
-Tool call từ LLM
+Tool call from LLM
       │
       ▼
   Sandbox classify risk
       │
-      ├── Low ──────► Tự chạy ✅
+      ├── Low ──────► Runs automatically ✅
       │
-      ├── Medium ──► Cần approval
+      ├── Medium ──► Needs approval
       │                  │
-      │                  ├── Interactive: TUI hiển thị prompt
-      │                  │   User approve/reject
+      │                  ├── Interactive: TUI displays prompt
+      │                  │   User approves/rejects
       │                  │
-      │                  └── Headless: AutoApprove nếu configured
-      │                      Hoặc deadlock ❌ nếu không configured
+      │                  └── Headless: AutoApprove if configured
+      │                      Otherwise deadlock ❌
       │
-      ├── High ────► Cần approval (như Medium)
+      ├── High ────► Needs approval (same as Medium)
       │
-      └── Critical ─► Luôn từ chối ❌
+      └── Critical ─► Always rejected ❌
 ```
 
 ### Auto-approve config
 
 ```bash
-# Headless mode: bật auto-approve để tránh deadlock
-export YOLO_AUTO_APPROVE_MEDIUM=true   # bash (lệnh an toàn)
-export YOLO_AUTO_APPROVE_HIGH=true     # edit_file, bash (lệnh nguy hiểm)
+# Headless mode: enable auto-approve to avoid deadlock
+export YOLO_AUTO_APPROVE_MEDIUM=true   # bash (safe commands)
+export YOLO_AUTO_APPROVE_HIGH=true     # edit_file, bash (dangerous commands)
 ```
 
-> **Lưu ý**: Critical-risk tools LUÔN bị từ chối, kể cả auto-approve bật.
+> **Note**: Critical-risk tools are ALWAYS rejected, even with auto-approve enabled.
 
 ## Tool Calling API
 
-yolo-code dùng **OpenAI native function calling** (không phải inline token format). Khi tạo provider, 4 tool definitions được gửi trong request:
+yolo-code uses **OpenAI native function calling** (not inline token format). When creating a provider request, 4 tool definitions are included:
 
 ```json
 {
-  "model": "moonshotai/Kimi-K2.7-Code",
+  "model": "gpt-4",
   "messages": [...],
   "tools": [
     { "type": "function", "function": { "name": "list_files", ... } },
@@ -226,24 +226,24 @@ yolo-code dùng **OpenAI native function calling** (không phải inline token f
 }
 ```
 
-Model trả về `delta.tool_calls` trong SSE stream thay vì inline `<|tool_calls|>` tokens. Runtime accumulate partial tool_calls qua nhiều SSE chunks và flush khi nhận `finish_reason: "tool_calls"` hoặc `[DONE]`.
+The model returns `delta.tool_calls` in the SSE stream instead of inline `<|tool_calls|>` tokens. The runtime accumulates partial tool_calls across SSE chunks and flushes on `finish_reason: "tool_calls"` or `[DONE]`.
 
 ## Multi-turn Agent Loop
 
 ```
-1. Think() → LLM trả về tool_calls
+1. Think() → LLM returns tool_calls
 2. Dispatch tool calls → Execution Engine
-3. Sandbox check → HITL approval (nếu cần)
-4. Tool thực thi → Observation
-5. RecordToolResult() → thêm vào conversation history
-6. HasMore() = true (vì lastTurn.Final = false)
-7. Loop lại Think() với history mới
-8. LLM trả về final answer (không tool_calls)
+3. Sandbox check → HITL approval (if needed)
+4. Tool executes → Observation
+5. RecordToolResult() → added to conversation history
+6. HasMore() = true (because lastTurn.Final = false)
+7. Loop back to Think() with new history
+8. LLM returns final answer (no tool_calls)
 9. HasMore() = false → DONE
 ```
 
-## Xem thêm
+## See also
 
-- [Configuration](configuration.md) — cấu hình HITL, sandbox
-- [Architecture](architecture.md) — Execution Engine trong kiến trúc
+- [Configuration](configuration.md) — configuring HITL, sandbox
+- [Architecture](architecture.md) — Execution Engine in the architecture
 - [Sandbox Red-Team](../security/sandbox-redteam.md) — adversarial test checklist

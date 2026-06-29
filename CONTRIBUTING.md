@@ -1,117 +1,117 @@
-# Đóng góp vào yolo-code
+# Contributing to yolo-code
 
-Cảm ơn bạn muốn đóng góp! Dưới đây là hướng dẫn để đảm bảo quy trình trơn tru.
+Thanks for wanting to contribute! Here's how to ensure a smooth process.
 
 ## Fork & Clone
 
 ```bash
-# 1. Fork repo trên GitHub
-# 2. Clone fork của bạn
+# 1. Fork the repo on GitHub
+# 2. Clone your fork
 git clone https://github.com/<username>/yolo-code.git
 cd yolo-code
 
-# 3. Thêm upstream remote
+# 3. Add upstream remote
 git remote add upstream https://github.com/baobao1044/yolo-code.git
 ```
 
-## Quy trình phát triển
+## Development Workflow
 
-### Tạo branch
+### Create a branch
 
 ```bash
-git checkout -b feature/ten-tinh-nang
-# hoặc
-git checkout -b fix/ten-bug
+git checkout -b feature/my-feature
+# or
+git checkout -b fix/my-bug
 ```
 
-### Chạy CI locally trước khi push
+### Run CI locally before pushing
 
 ```bash
 make ci
 ```
 
-Lệnh này chạy tất cả CI gates: `vet` → `fmt` → `build` → `test` → `golden`.
+This runs all CI gates: `vet` → `fmt` → `build` → `test` → `golden`.
 
-Nếu bạn có CGO/gcc (Linux):
+If you have CGO/gcc (Linux):
 
 ```bash
 make test-race    # race detector
 make lint         # golangci-lint
 ```
 
-### Commit message
+### Commit messages
 
-Sử dụng [Conventional Commits](https://www.conventionalcommits.org/):
+Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat: thêm tool xyz
-fix: sửa crash khi input rỗng
-docs: cập nhật quickstart
-refactor: tách module cognitive
-test: thêm test cho sandbox
+feat: add xyz tool
+fix: fix crash on empty input
+docs: update quickstart
+refactor: extract cognitive module
+test: add sandbox tests
 chore: bump Go 1.26
 ```
 
-### Tạo Pull Request
+### Create a Pull Request
 
-1. Push branch lên fork:
+1. Push branch to your fork:
    ```bash
-   git push origin feature/ten-tinh-nang
+   git push origin feature/my-feature
    ```
-2. Tạo PR từ fork → `baobao1044/yolo-code` branch `master`
-3. Mô tả rõ: **What** (làm gì), **Why** (tại sao), **How** (cách làm)
-4. Đảm bảo CI pass (GitHub Actions chạy tự động)
+2. Create a PR from your fork → `baobao1044/yolo-code` branch `master`
+3. Describe clearly: **What** (what you did), **Why** (why), **How** (how)
+4. Ensure CI passes (GitHub Actions runs automatically)
 
 ## Code Style
 
-| Quy tắc | Công cụ |
+| Rule | Tool |
 |---|---|
-| Format | `gofmt` (chạy `make fmt`) |
-| Static analysis | `go vet` (chạy `make vet`) |
-| Linter | `golangci-lint` (chạy `make lint`) |
-| Import order | `gofmt` tự xử |
+| Format | `gofmt` (run `make fmt`) |
+| Static analysis | `go vet` (run `make vet`) |
+| Linter | `golangci-lint` (run `make lint`) |
+| Import order | `gofmt` handles it |
 
-### Quy ước code
+### Code conventions
 
-- **Mỗi layer chỉ import layer thấp hơn + Event Bus** — không bao giờ phụ thuộc TUI
-- **Event-driven**: Memory updates CHỈ qua events, không bao giờ gọi trực tiếp
-- **Single-goroutine FSM**: Runtime state machine chạy trên 1 goroutine duy nhất
-- **Sandbox-first**: Tất cả filesystem/shell operations phải đi qua sandbox
+- **Each layer may only import lower layers + Event Bus** — never depend on TUI
+- **Event-driven**: Memory updates ONLY via events, never direct calls
+- **Single-goroutine FSM**: Runtime state machine runs on exactly 1 goroutine
+- **Sandbox-first**: All filesystem/shell operations must go through the sandbox
 
 ## Testing
 
-### Loại tests
+### Test types
 
-| Loại | Lệnh | Khi nào dùng |
+| Type | Command | When to use |
 |---|---|---|
-| Unit | `make test` | Mỗi lần thay đổi code |
-| Race | `make test-race` | Trước merge (cần CGO) |
-| Golden | `make test-golden` | Kiểm tra deterministic output |
+| Unit | `make test` | Every code change |
+| Race | `make test-race` | Before merge (requires CGO) |
+| Golden | `make test-golden` | Check deterministic output |
 | Snapshot | `make test-snapshot` | Performance budgets |
 | Docs | `make test-docs` | Documentation coverage |
-| Lint | `make lint` | Trước push |
+| Lint | `make lint` | Before push |
 
-### Viết test mới
+### Writing new tests
 
-- Đặt test file cùng thư mục với code: `foo.go` → `foo_test.go`
-- Dùng `t.Parallel()` khi test không phụ thuộc lẫn nhau
-- Golden tests: đặt trong `testdata/` với build tag `//go:build golden`
+- Place test files in the same directory as the code: `foo.go` → `foo_test.go`
+- Use `t.Parallel()` when tests don't depend on each other
+- Golden tests: place in `testdata/` with build tag `//go:build golden`
 - Snapshot tests: build tag `//go:build snapshot`
 
 ## Debugging
 
 ```bash
-# Chạy 1 test cụ thể
+# Run a specific test
 go test -run TestFunctionName ./internal/cognitive/...
 
-# Xem log chi tiết
+# Verbose logging
 YOLO_LOG=/tmp/yolo.log go test -v ./...
 
-# Race detector locally (cần CGO)
+# Race detector locally (requires CGO)
 CGO_ENABLED=1 go test -race ./...
 ```
 
-## Cấu trúc thư mục
+## Directory structure
 
 ```
 cmd/yolo/          # CLI entrypoint
@@ -133,8 +133,8 @@ docs/               # Documentation
 00-15*.md           # Design docs (developer-facing)
 ```
 
-## Cần giúp đỡ?
+## Need help?
 
-- Mở issue trên GitHub
-- Hỏi trong Discussions
-- Xem thêm [docs/workflow/development.md](docs/workflow/development.md)
+- Open an issue on GitHub
+- Ask in Discussions
+- See [docs/workflow/development.md](docs/workflow/development.md)

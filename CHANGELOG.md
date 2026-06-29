@@ -1,28 +1,26 @@
 # Changelog
 
-Tất cả thay đổi đáng chú ý của project này sẽ được ghi lại trong file này.
+All notable changes to this project will be documented in this file.
 
-Format dựa trên [Keep a Changelog](https://keepachangelog.com/vi/1.1.0/),
-và project tuân thủ [Semantic Versioning](https://semver.org/lang/vi/).
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
 ### Added
 
-- OpenAI-compatible provider (`OpenAICompatProvider`) với SSE streaming
-- Hỗ trợ Kimi K2.7 qua WandB inference API
-- Native tool calling API — model emit `delta.tool_calls` thay vì inline tokens
-- 4 tools tích hợp: `list_files`, `read_file`, `edit_file`, `bash`
-- Multi-turn agent loop: Think → Tool Call → Execute → Verify → Think lại
-- HITL (Human-in-the-Loop) approval gate với risk classification
-- Sandbox an toàn: path confinement, wrapper peeling, shell escape detection, network default-deny
+- OpenAI-compatible provider (`OpenAICompatProvider`) with SSE streaming
+- 4 built-in tools: `list_files`, `read_file`, `edit_file`, `bash`
+- Multi-turn agent loop: Think → Tool Call → Execute → Verify → Think again
+- HITL (Human-in-the-Loop) approval gate with risk classification
+- Safe sandbox: path confinement, wrapper peeling, shell escape detection, network default-deny
 - Interactive TUI mode (bubbletea + lipgloss)
-- Headless mode (JSON events cho CI/scripts)
-- Event Bus backbone với 16 topic groups
+- Headless mode (JSON events for CI/scripts)
+- Event Bus backbone with 16 topic groups
 - Single-goroutine Runtime FSM (12 states, 20 transitions)
-- Context Engine với relevance scoring (recency, proximity, semantic, centrality, explicit)
+- Context Engine with relevance scoring (recency, proximity, semantic, centrality, explicit)
 - Prompt Compiler: dedup → summarize → budget → order
-- Pure-Go vector store cho memory system
+- Pure-Go vector store for memory system
 - Multi-agent coordination layer (DAG scheduler)
 - OpenTelemetry traces + structured logging (slog)
 - Cross-compile matrix: linux/amd64, linux/arm64, darwin/amd64, darwin/arm64
@@ -31,14 +29,14 @@ và project tuân thủ [Semantic Versioning](https://semver.org/lang/vi/).
 
 ### Changed
 
-- Tool `read` đổi tên thành `read_file`, arg `path` → `file`
+- Tool `read` renamed to `read_file`, arg `path` → `file`
 - Tool `bash` arg `cmd` → `command`
-- Headless mode: medium/high risk tools cần AutoApprove config để tránh deadlock
-- Conversation history accumulation: `Think()` giữ lịch sử qua nhiều turns
+- Headless mode: medium/high risk tools need AutoApprove config to avoid deadlock
+- Conversation history accumulation: `Think()` retains history across turns
 
 ### Fixed
 
-- `parseSSE()` không accumulate partial tool_calls → fix với `partials map[int]*partialCall`
-- `HasMore()` trả về `false` sau tool call → fix trả về `!lastTurn.Final`
-- Duplicate prompt messages mỗi turn → fix chỉ init history lần đầu
-- Headless deadlock khi HITL gate chờ approval → thêm AutoApprove config
+- `parseSSE()` did not accumulate partial tool_calls → fixed with `partials map[int]*partialCall`
+- `HasMore()` returned `false` after tool call → fixed to return `!lastTurn.Final`
+- Duplicate prompt messages each turn → fixed to init history only once
+- Headless deadlock when HITL gate waits for approval → added AutoApprove config

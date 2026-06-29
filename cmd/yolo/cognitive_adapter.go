@@ -76,8 +76,8 @@ func cognitiveToRuntimeDecision(d cog.ReflectionDecision) runtime.ReflectionDeci
 
 // newRealCognitiveCore builds a cognitive.Core with the supplied provider and
 // the shared bus. The standard tool set is passed so the provider can include
-// native function/tool definitions in the API request (models like Kimi K2.7
-// use structured tool_calls when tools are provided).
+// native function/tool definitions in the API request (models that support
+// structured tool_calls when tools are provided).
 func newRealCognitiveCore(provider cog.Provider, bus *event.Bus) runtime.CognitiveCore {
 	tools := []string{"list_files", "read_file", "edit_file", "bash"}
 	return &cognitiveAdapter{core: cog.New(provider, bus, tools...)}

@@ -1,8 +1,8 @@
 # Vector Store
 
-yolo-code sử dụng pure-Go vector store cho semantic search — không cần external services (Pinecone, Weaviate, v.v.).
+yolo-code uses a pure-Go vector store for semantic search — no external services required (Pinecone, Weaviate, etc.).
 
-## Tổng quan
+## Overview
 
 ```
 ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
@@ -25,7 +25,7 @@ yolo-code sử dụng pure-Go vector store cho semantic search — không cần 
 
 ### Per-function chunking
 
-Code được chunk theo function/method boundaries — không phải fixed-size windows.
+Code is chunked by function/method boundaries — not fixed-size windows.
 
 ```go
 // Chunk 1
@@ -46,13 +46,13 @@ func FibonacciIter(n int) int {
 }
 ```
 
-### Lợi ích
+### Benefits
 
-- **Semantic coherence**: Mỗi chunk là 1 unit logic hoàn chỉnh
-- **Better retrieval**: Query "fibonacci function" match chính xác chunk chứa function
-- **No split mid-code**: Không cắt giữa dòng code
+- **Semantic coherence**: Each chunk is a complete logical unit
+- **Better retrieval**: Query "fibonacci function" matches exactly the chunk containing the function
+- **No split mid-code**: Never cuts in the middle of a line
 
-### Metadata mỗi chunk
+### Metadata per chunk
 
 ```json
 {
@@ -70,45 +70,45 @@ func FibonacciIter(n int) int {
 
 ### Local embedding model
 
-yolo-code dùng embedding model chạy locally — không cần API call cho embedding.
+yolo-code uses a locally-running embedding model — no API calls needed for embedding.
 
-| Thuộc tính | Giá trị |
+| Property | Value |
 |---|---|
 | Model | Local ONNX or Go-native model |
-| Dimension | 384–768 (tùy model) |
-| Speed | ~1ms per chunk trên CPU |
+| Dimension | 384–768 (depends on model) |
+| Speed | ~1ms per chunk on CPU |
 | Cost | Free (local inference) |
 
 ### Embedding flow
 
 ```
-1. Chunk code thành per-function pieces
-2. Mỗi chunk → embedding model → vector
-3. Vector + metadata → store trong Vector Store
+1. Chunk code into per-function pieces
+2. Each chunk → embedding model → vector
+3. Vector + metadata → store in Vector Store
 ```
 
 ## Vector Store
 
 ### Storage
 
-Pure-Go in-memory vector store (HNSW hoặc brute-force cho small corpora):
+Pure-Go in-memory vector store (HNSW or brute-force for small corpora):
 
 ```go
 type VectorStore struct {
     chunks map[string]*Chunk    // id → chunk
     vecs   map[string][]float32  // id → vector
-    index  *hnsw.Graph           // HNSW index (nếu lớn)
+    index  *hnsw.Graph           // HNSW index (for large corpora)
 }
 ```
 
 ### Operations
 
-| Operation | Mô tả | Complexity |
+| Operation | Description | Complexity |
 |---|---|---|
-| `Insert(id, vec, meta)` | Thêm chunk | O(log n) HNSW |
-| `Search(query_vec, k)` | Tìm top-K similar | O(log n) HNSW |
-| `Delete(id)` | Xoá chunk | O(log n) HNSW |
-| `Size() int` | Số chunks | O(1) |
+| `Insert(id, vec, meta)` | Add chunk | O(log n) HNSW |
+| `Search(query_vec, k)` | Find top-K similar | O(log n) HNSW |
+| `Delete(id)` | Remove chunk | O(log n) HNSW |
+| `Size() int` | Number of chunks | O(1) |
 
 ### Cosine similarity
 
@@ -129,26 +129,26 @@ func cosine(a, b []float32) float32 {
 ```
 1. User task → embedding model → query vector
 2. VectorStore.Search(query_vec, topK=10)
-3. Lọc: similarity score > threshold (θ)
-4. Rank kết quả theo score (giảm dần)
-5. Trả về top chunks cho Context Engine
-6. Context Engine integrate vào prompt
+3. Filter: similarity score > threshold (θ)
+4. Rank results by score (descending)
+5. Return top chunks to Context Engine
+6. Context Engine integrates into prompt
 ```
 
 ### Parameters
 
-| Parameter | Mặc định | Mô tả |
+| Parameter | Default | Description |
 |---|---|---|
-| `topK` | 10 | Số chunks trả về |
+| `topK` | 10 | Number of chunks to return |
 | `threshold` | 0.7 | Minimum cosine similarity |
-| `rerank` | true | Re-rank bằng cross-encoder (nếu có) |
+| `rerank` | true | Re-rank with cross-encoder (if available) |
 
 ## Indexing
 
-### Khi nào index
+### When to index
 
-- **Cold start**: Index toàn bộ repo khi session bắt đầu
-- **Incremental**: Re-index files khi `edit_file` hoặc `bash` thay đổi code
+- **Cold start**: Index entire repo when a session begins
+- **Incremental**: Re-index files when `edit_file` or `bash` changes code
 - **Event-driven**: File change events trigger re-index
 
 ### Index flow
@@ -156,13 +156,13 @@ func cosine(a, b []float32) float32 {
 ```
 1. Walk repo root (list_files)
 2. Skip: .git/, node_modules/, vendor/, __pycache__/, .cache/, dist/
-3. Mỗi file → parse → chunk per function
-4. Mỗi chunk → embed → store
-5. HNSW index rebuild (hoặc incremental insert)
+3. Each file → parse → chunk per function
+4. Each chunk → embed → store
+5. HNSW index rebuild (or incremental insert)
 ```
 
-## Xem thêm
+## See also
 
-- [Context Engine](context-engine.md) — Cách retrieval tích hợp vào prompt
-- [Memory Lifecycle](memory-lifecycle.md) — Cách memory được cập nhật
-- [Architecture](../user/architecture.md) — Vị trí Vector Store trong kiến trúc
+- [Context Engine](context-engine.md) — How retrieval integrates into the prompt
+- [Memory Lifecycle](memory-lifecycle.md) — How memory is updated
+- [Architecture](../user/architecture.md) — Vector Store position in the architecture

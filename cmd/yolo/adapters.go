@@ -102,6 +102,10 @@ func (a *assertCognitive) Think(_ context.Context, p runtime.Prompt) (runtime.Co
 
 func (a *assertCognitive) HasMore(*session.Task) bool { return false }
 
+// RecordToolResult satisfies runtime.CognitiveCore. The assert core ignores
+// tool results — it always answers Final, so multi-turn never reaches it.
+func (a *assertCognitive) RecordToolResult(string, string) {}
+
 // Reflect on the assertion core aborts (it never reaches the verify path; a
 // failure here would be a wiring bug). The real cognitive core (Sprint 6
 // wiring) overrides this with the LLM reflection; assertCognitive is the Sprint

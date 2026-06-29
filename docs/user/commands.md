@@ -2,53 +2,53 @@
 
 ## Global flags
 
-| Flag | Mặc định | Mô tả |
+| Flag | Default | Description |
 |---|---|---|
-| `--headless` | `false` | Chạy không TUI; emit JSON events ra stdout |
-| `--repo` | cwd | Repo root cho context engine |
-| `--open` | `""` | Danh sách files (phẩy) load vào context ban đầu |
-| `--model` | từ env | Override model name |
-| `--base-url` | từ env | Override API base URL |
-| `--version` | n/a | In version và thoát |
+| `--headless` | `false` | Run without TUI; emit JSON events to stdout |
+| `--repo` | cwd | Repo root for the context engine |
+| `--open` | `""` | Comma-separated list of files to load into context |
+| `--model` | from env | Override model name |
+| `--base-url` | from env | Override API base URL |
+| `--version` | n/a | Print version and exit |
 
 ## Environment variables
 
-| Biến | Mục đích |
+| Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | API key cho LLM provider (bắt buộc) |
-| `OPENAI_BASE_URL` | Base URL của OpenAI-compatible API |
-| `OPENAI_MODEL` | Tên model (vd: `gpt-4`, `moonshotai/Kimi-K2.7-Code`) |
-| `YOLO_LOG` | Đường dẫn file structured log |
-| `YOLO_AUTO_APPROVE_MEDIUM` | `"true"` = tự approve medium-risk tools |
-| `YOLO_AUTO_APPROVE_HIGH` | `"true"` = tự approve high-risk tools |
-| `YOLO_REPO_ROOT` | Repo root (mặc định = cwd) |
+| `OPENAI_API_KEY` | API key for the LLM provider (required) |
+| `OPENAI_BASE_URL` | Base URL of the OpenAI-compatible API |
+| `OPENAI_MODEL` | Model name (e.g. `gpt-4`) |
+| `YOLO_LOG` | Structured log file path |
+| `YOLO_AUTO_APPROVE_MEDIUM` | `"true"` = auto-approve medium-risk tools |
+| `YOLO_AUTO_APPROVE_HIGH` | `"true"` = auto-approve high-risk tools |
+| `YOLO_REPO_ROOT` | Repo root (default = cwd) |
 
 ## Exit codes
 
-| Code | Ý nghĩa |
+| Code | Meaning |
 |---|---|
-| `0` | Task hoàn thành thành công |
-| `1` | Task thất bại, bị huỷ, hoặc lỗi không mong đợi |
-| `130` | Bị interrupt bởi user (Ctrl+C) |
+| `0` | Task completed successfully |
+| `1` | Task failed, was cancelled, or unexpected error |
+| `130` | Interrupted by user (Ctrl+C) |
 
-Interactive mode trả về `0` chỉ khi task đạt `task.completed`. Headless mode trả về `0` nếu transcript kết thúc ở completed state.
+Interactive mode returns `0` only when the task reaches `task.completed`. Headless mode returns `0` if the transcript ends in a completed state.
 
-## Ví dụ
+## Examples
 
 ```bash
-# Headless — task từ stdin
-echo "refactor hàm main" | yolo --headless
+# Headless — task from stdin
+echo "refactor the main function" | yolo --headless
 
-# Headless — chỉ định repo
-echo "sửa bug" | yolo --headless --repo /path/to/project
+# Headless — specify repo
+echo "fix the bug" | yolo --headless --repo /path/to/project
 
-# Headless — load files cụ thể vào context
-echo "giải thích code" | yolo --headless --open main.go,internal/cognitive/core.go
+# Headless — load specific files into context
+echo "explain the code" | yolo --headless --open main.go,internal/cognitive/core.go
 
 # Interactive
 yolo
 
-# Interactive — chỉ định model
+# Interactive — specify model
 yolo --model gpt-4o --base-url https://api.openai.com/v1
 
 # Version
@@ -57,16 +57,16 @@ yolo version
 
 ## Headless JSON format
 
-Mỗi event là 1 JSON line. Các loại event chính:
+Each event is a JSON line. Main event types:
 
-| Event | Mô tả |
+| Event | Description |
 |---|---|
-| `state.change` | FSM chuyển state |
+| `state.change` | FSM state transition |
 | `observation` | Tool execution result |
-| `task.completed` | Task hoàn thành |
-| `task.failed` | Task thất bại |
+| `task.completed` | Task completed |
+| `task.failed` | Task failed |
 
-Ví dụ:
+Example:
 
 ```json
 {"type":"state.change","state":"think"}

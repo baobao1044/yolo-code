@@ -52,8 +52,8 @@ func (c *patchCognitive) Reflect(_ context.Context, _ *session.Task, _ Verdict, 
 		return ReflectionDecision{Abort: true, Note: "reflection abort"}
 	}
 	// Ask for a corrective patch → the runtime drives PATCH.
-		return ReflectionDecision{Patch: PatchOp{Body: []byte("corrective")}}
-	}
+	return ReflectionDecision{Patch: PatchOp{Body: []byte("corrective")}}
+}
 
 func (*patchCognitive) RecordToolResult(string, string) {}
 

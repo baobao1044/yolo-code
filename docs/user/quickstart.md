@@ -1,16 +1,16 @@
 # Quickstart
 
-## Cài đặt
+## Installation
 
-### Cách 1: go install (nhanh nhất)
+### Option 1: go install (fastest)
 
 ```bash
 go install github.com/yolo-code/yolo/cmd/yolo@latest
 ```
 
-Binary sẽ ở `$GOPATH/bin/yolo` (hoặc `$HOME/go/bin/yolo`).
+The binary will be at `$GOPATH/bin/yolo` (or `$HOME/go/bin/yolo`).
 
-### Cách 2: Clone và build
+### Option 2: Clone and build
 
 ```bash
 git clone https://github.com/baobao1044/yolo-code.git
@@ -18,9 +18,9 @@ cd yolo-code
 go build -o yolo ./cmd/yolo
 ```
 
-## Cấu hình LLM Provider
+## Configure LLM Provider
 
-yolo-code cần 1 LLM provider hỗ trợ OpenAI-compatible API. Cấu hình qua environment variables hoặc file `.env`.
+yolo-code requires an LLM provider with an OpenAI-compatible API. Configure via environment variables or a `.env` file.
 
 ### Option A: OpenAI
 
@@ -30,32 +30,24 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_MODEL="gpt-4"
 ```
 
-### Option B: Kimi K2.7 qua WandB
-
-```bash
-export OPENAI_API_KEY="wandb_v1_..."
-export OPENAI_BASE_URL="https://api.inference.wandb.ai/v1"
-export OPENAI_MODEL="moonshotai/Kimi-K2.7-Code"
-```
-
-### Option C: File .env
+### Option B: .env file
 
 ```bash
 cp .env.example .env
-# Sửa .env với API key và model của bạn
+# Edit .env with your API key and model
 ```
 
-> yolo-code tự động load `.env` nếu có file trong thư mục hiện tại.
+> yolo-code automatically loads `.env` if the file exists in the current directory.
 
-## Chạy lần đầu
+## First Run
 
 ### Headless mode
 
 ```bash
-echo "giải thích hàm main" | yolo --headless
+echo "explain the main function" | yolo --headless
 ```
 
-Output: 1 JSON line per event. Ví dụ:
+Output: 1 JSON line per event. Example:
 
 ```json
 {"type":"state.change","state":"think"}
@@ -65,9 +57,9 @@ Output: 1 JSON line per event. Ví dụ:
 {"type":"task.completed"}
 ```
 
-Headless mode phù hợp cho:
-- Scripts và automation
-- Golden tests (output deterministic cho cùng input)
+Headless mode is ideal for:
+- Scripts and automation
+- Golden tests (deterministic output for same input)
 - CI pipelines
 
 ### Interactive mode
@@ -76,38 +68,38 @@ Headless mode phù hợp cho:
 yolo
 ```
 
-TUI hiển thị:
-- **Board**: multi-agent progress khi coordination layer phân tách task
-- **Cost meter**: token usage và chi phí
-- **Diff viewer**: xem thay đổi file real-time
-- **Status bar**: trạng thái FSM hiện tại
+The TUI displays:
+- **Board**: multi-agent progress when the coordination layer splits a task
+- **Cost meter**: token usage and cost
+- **Diff viewer**: see file changes in real-time
+- **Status bar**: current FSM state
 
-Gõ task ở prompt bên dưới và nhấn Enter.
+Type a task at the prompt and press Enter.
 
-## Ví dụ: Tạo project nhỏ
+## Example: Create a small project
 
 ```bash
-# Chạy agent tạo 1 project Fibonacci CLI
-echo "tạo 1 CLI tool tính fibonacci với tests" | yolo --headless
+# Run the agent to create a Fibonacci CLI
+echo "create a CLI tool that computes fibonacci with tests" | yolo --headless
 ```
 
-Agent sẽ:
-1. `list_files` — xem repo hiện tại
-2. `edit_file` — tạo `main.go` với fibonacci function
-3. `edit_file` — tạo `main_test.go` với tests
-4. `bash` — chạy `go test`
-5. `bash` — chạy `go build`
-6. Verify và hoàn thành
+The agent will:
+1. `list_files` — see the current repo
+2. `edit_file` — create `main.go` with a fibonacci function
+3. `edit_file` — create `main_test.go` with tests
+4. `bash` — run `go test`
+5. `bash` — run `go build`
+6. Verify and complete
 
-## Kiểm tra version
+## Check version
 
 ```bash
 yolo version
 ```
 
-## Bước tiếp theo
+## Next steps
 
-- [Commands & Flags](commands.md) — tất cả flags và env vars
-- [Configuration](configuration.md) — cấu hình đầy đủ
-- [Tools Reference](tools.md) — 4 tools và cách hoạt động
-- [TUI Guide](tui-guide.md) — sử dụng TUI
+- [Commands & Flags](commands.md) — all flags and env vars
+- [Configuration](configuration.md) — full configuration
+- [Tools Reference](tools.md) — 4 tools and how they work
+- [TUI Guide](tui-guide.md) — using the TUI

@@ -1,48 +1,47 @@
 # Progress Changelog
 
-Lịch sử thay đổi quan trọng của yolo-code, cập nhật theo thời gian.
+Important changes to yolo-code, updated over time.
 
 ## 2026-06-28
 
 ### Documentation overhaul
-- Tạo README.md gốc với badges, features, quickstart, architecture
-- Tạo CONTRIBUTING.md, CHANGELOG.md, LICENSE, .env.example
-- Mở rộng docs/user/: thêm architecture.md, configuration.md, tools.md, tui-guide.md
-- Tạo docs/workflow/: ci-cd.md, development.md
-- Tạo docs/rag/: context-engine.md, vector-store.md, memory-lifecycle.md
-- Tạo docs/progress/: sprint-status.md, changelog.md
+- Created root README.md with badges, features, quickstart, architecture
+- Created CONTRIBUTING.md, CHANGELOG.md, LICENSE, .env.example
+- Expanded docs/user/: added architecture.md, configuration.md, tools.md, tui-guide.md
+- Created docs/workflow/: ci-cd.md, development.md
+- Created docs/rag/: context-engine.md, vector-store.md, memory-lifecycle.md
+- Created docs/progress/: sprint-status.md, changelog.md
 
 ### Multi-turn agent loop
-- Fix `HasMore()` trả về `!lastTurn.Final` → agent loop tiếp tục sau tool execution
-- Thêm `RecordToolResult(toolName, result)` → conversation history accumulation
-- Fix duplicate prompt messages: chỉ init history lần đầu Think()
+- Fixed `HasMore()` to return `!lastTurn.Final` → agent loop continues after tool execution
+- Added `RecordToolResult(toolName, result)` → conversation history accumulation
+- Fixed duplicate prompt messages: only init history on first Think()
 
 ## 2026-06-27
 
 ### Native tool calling API
-- Thêm `tools[]` definitions trong OpenAI chat request
-- Model emit `delta.tool_calls` thay vì inline tokens
-- Rewrite `parseSSE()` với partial tool_calls accumulation (by index)
-- Flush trên `finish_reason: "tool_calls"` hoặc `[DONE]`
+- Added `tools[]` definitions in OpenAI chat request
+- Model emits `delta.tool_calls` instead of inline tokens
+- Rewrote `parseSSE()` with partial tool_calls accumulation (by index)
+- Flush on `finish_reason: "tool_calls"` or `[DONE]`
 
-### 4 Tools tích hợp
-- `list_files` — liệt kê repo files (Low risk)
-- `read_file` — đọc file nội dung (Low risk)
-- `edit_file` — ghi đè file (High risk)
-- `bash` — chạy shell command (Medium–Critical risk)
+### 4 Built-in tools
+- `list_files` — list repo files (Low risk)
+- `read_file` — read file contents (Low risk)
+- `edit_file` — overwrite file (High risk)
+- `bash` — run shell command (Medium–Critical risk)
 
 ## 2026-06-26
 
 ### OpenAI-compatible provider
-- Tạo `OpenAICompatProvider` với SSE streaming
-- Hỗ trợ Kimi K2.7 qua WandB inference API
-- Parse SSE `data: {json}\n\n` format với `[DONE]` terminator
+- Created `OpenAICompatProvider` with SSE streaming
+- Parses SSE `data: {json}\n\n` format with `[DONE]` terminator
 
 ### HITL approval gate
 - Risk classification: low/medium/high/critical
-- Interactive mode: TUI prompt cho approval
+- Interactive mode: TUI prompt for approval
 - Headless mode: AutoApprove config (YOLO_AUTO_APPROVE_MEDIUM/HIGH)
-- Critical risk: luôn từ chối
+- Critical risk: always rejected
 
 ## 2026-06-25
 
@@ -65,7 +64,7 @@ Lịch sử thay đổi quan trọng của yolo-code, cập nhật theo thời g
 ### Patch Engine
 - SEARCH/REPLACE primary + unified diff fallback
 - Conflict detection
-- Git checkpoint trước mỗi edit
+- Git checkpoint before each edit
 
 ## 2026-06-10
 
@@ -85,10 +84,10 @@ Lịch sử thay đổi quan trọng của yolo-code, cập nhật theo thời g
 ## 2026-06-01
 
 ### Project kickoff
-- Khởi tạo project: Go 1.26, bubbletea TUI
+- Project initialization: Go 1.26, bubbletea TUI
 - Session Manager: lifecycle, checkpoints, undo stack
 - Basic CLI: `yolo` binary, `--headless` flag
 
 ---
 
-> Changelog chi tiết kỹ thuật xem [CHANGELOG.md](../../CHANGELOG.md) ở root.
+> For detailed technical changelog, see [CHANGELOG.md](../../CHANGELOG.md) at root.

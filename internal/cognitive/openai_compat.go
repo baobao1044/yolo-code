@@ -1,5 +1,5 @@
 // OpenAI-compatible chat completions provider (File 07 §7.7.1). Implements
-// cognitive.Provider against any /chat/completions endpoint (OpenAI, WandB,
+// cognitive.Provider against any /chat/completions endpoint (OpenAI,
 // Together, local llama.cpp, etc.). Streams SSE responses and parses them
 // into Chunk values. Configured via environment variables:
 //
@@ -10,7 +10,7 @@
 //
 // When the request carries tool names (Request.Tools), the provider includes
 // OpenAI-native function/tool definitions in the chat completions request so
-// models that support structured tool calling (e.g. Kimi K2.7) emit
+// models that support structured tool calling emit
 // delta.tool_calls instead of inline tool tokens.
 
 package cognitive

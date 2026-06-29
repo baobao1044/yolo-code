@@ -1,13 +1,13 @@
 # Sprint Progress
 
-Theo dõi tiến trình phát triển yolo-code theo sprints. Chi tiết roadmap tại `15-Implementation_Roadmap.md`.
+Track yolo-code development progress by sprint. Full roadmap in `15-Implementation_Roadmap.md`.
 
-## Nội dung
+## Contents
 
-- [Sprint Status](sprint-status.md) — Bảng trạng thái tất cả sprints
-- [Changelog](changelog.md) — Lịch sử thay đổi theo thời gian
+- [Sprint Status](sprint-status.md) — Status table for all sprints
+- [Changelog](changelog.md) — Change history over time
 
-## Tổng quan
+## Overview
 
 | Phase | Sprints | Focus | Status |
 |---|---|---|---|

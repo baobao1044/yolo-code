@@ -1,10 +1,10 @@
 # CI/CD Pipeline
 
-yolo-code có 2 GitHub Actions workflows + Makefile mirror cho local development.
+yolo-code has 2 GitHub Actions workflows + a Makefile mirror for local development.
 
 ## CI Pipeline (`ci.yml`)
 
-Chạy trên mỗi push đến `master` và mỗi pull request. Concurrency: cancel in-progress khi có push mới.
+Runs on every push to `master` and every pull request. Concurrency: cancel in-progress when a new push arrives.
 
 ### Pipeline stages
 
@@ -32,9 +32,9 @@ docs (ubuntu)                                         │
                                                       ┘
 ```
 
-### Jobs chi tiết
+### Job details
 
-| Job | Runner | Mô tả | Lệnh |
+| Job | Runner | Description | Command |
 |---|---|---|---|
 | `lint` | ubuntu-latest | golangci-lint | `golangci-lint run --timeout=5m` |
 | `build-and-test` | ubuntu/win/mac | Build + vet + fmt + unit | `go build/vet/test` |
@@ -45,75 +45,75 @@ docs (ubuntu)                                         │
 
 ### Race detector
 
-Race detector yêu cầu CGO + gcc. Chỉ chạy trên Linux runner (GitHub-hosted có gcc). Nếu development trên Windows/Mac, skip race tests locally và rely on CI.
+The race detector requires CGO + gcc. It only runs on the Linux runner (GitHub-hosted has gcc). If developing on Windows/Mac, skip race tests locally and rely on CI.
 
 ## Release Dry-Run (`release.yml`)
 
-Chạy trên mỗi push đến `master`. Sử dụng GoReleaser snapshot mode — **KHÔNG** tạo tag, release, hay publish artifacts.
+Runs on every push to `master`. Uses GoReleaser snapshot mode — does NOT create tags, releases, or publish artifacts.
 
 ```
 checkout (fetch-depth: 0)
   → setup Go 1.26
     → GoReleaser snapshot
-      → artifacts trong dist/ (bị discard)
+      → artifacts in dist/ (discarded)
 ```
 
 ## Makefile Targets
 
-Makefile mirror CI stages để chạy locally:
+The Makefile mirrors CI stages for local running:
 
-| Target | Lệnh | Mô tả |
+| Target | Command | Description |
 |---|---|---|
-| `make all` | `go build ./...` | Build tất cả |
+| `make all` | `go build ./...` | Build everything |
 | `make build` | `go build ./...` | Build |
 | `make cross` | `GOOS=linux GOARCH=amd64 go build ...` | Cross-compile 4 targets |
 | `make vet` | `go vet ./...` | Static analysis |
-| `make fmt` | `gofmt -l .` | Kiểm tra format |
+| `make fmt` | `gofmt -l .` | Check formatting |
 | `make test` | `go test ./...` | Unit tests |
 | `make test-race` | `CGO_ENABLED=1 go test -race ./...` | Race detector |
 | `make test-golden` | `go test -tags=golden ./...` | Golden-transcript determinism |
 | `make test-snapshot` | `go test -tags=snapshot ./internal/tui` | Performance budgets |
 | `make test-docs` | `go test -tags=docs ./cmd/yolo` | Doc coverage |
 | `make lint` | `golangci-lint run --timeout=5m` | Linter |
-| `make ci` | `vet → fmt → build → test → golden` | Chuẩn CI gates |
+| `make ci` | `vet → fmt → build → test → golden` | Standard CI gates |
 | `make snapshot` | `goreleaser release --snapshot --clean` | Release dry-run |
-| `make clean` | `go clean -testcache` | Xoá test cache |
+| `make clean` | `go clean -testcache` | Clear test cache |
 
-### Chạy CI locally
+### Running CI locally
 
 ```bash
-# Tất cả CI gates (race test cần CGO)
+# All CI gates (race test requires CGO)
 make ci
 
-# Thêm race test (chỉ Linux/Mac có gcc)
+# Add race test (only Linux/Mac with gcc)
 make test-race
 
-# Thêm lint
+# Add lint
 make lint
 
-# Full kiểm tra trước push
+# Full check before push
 make ci && make lint && make test-race
 ```
 
 ## Badges
 
-| Badge | Workflow | Ý nghĩa |
+| Badge | Workflow | Meaning |
 |---|---|---|
-| ![CI](https://github.com/baobao1044/yolo-code/actions/workflows/ci.yml/badge.svg) | `ci.yml` | Tất cả jobs pass trên master/PR |
-| CI fail | `ci.yml` | Ít nhất 1 job fail — phải fix trước merge |
+| ![CI](https://github.com/baobao1044/yolo-code/actions/workflows/ci.yml/badge.svg) | `ci.yml` | All jobs pass on master/PR |
+| CI fail | `ci.yml` | At least 1 job failed — must fix before merge |
 
 ## Build Tags
 
-Một số tests tách biệt bằng build tags để không làm chậm default test loop:
+Some tests are isolated with build tags so they don't slow down the default test loop:
 
-| Tag | Mô tả | Target |
+| Tag | Description | Target |
 |---|---|---|
 | `golden` | Golden-transcript determinism | `make test-golden` |
 | `snapshot` | Performance budgets | `make test-snapshot` |
 | `docs` | Documentation coverage | `make test-docs` |
 
-## Xem thêm
+## See also
 
 - [Development Workflow](development.md) — Git workflow, sprint cadence, debugging
-- [Configuration](../user/configuration.md) — Cấu hình env vars
-- [Makefile](../../Makefile) — Source gốc
+- [Configuration](../user/configuration.md) — Env vars configuration
+- [Makefile](../../Makefile) — Source of truth

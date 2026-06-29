@@ -1,14 +1,14 @@
-# Hướng dẫn TUI
+# TUI Guide
 
-yolo-code TUI xây dựng trên [bubbletea](https://github.com/charmbracelet/bubbletea) + [lipgloss](https://github.com/charmbracelet/lipgloss) + [bubbles](https://github.com/charmbracelet/bubbles).
+The yolo-code TUI is built on [bubbletea](https://github.com/charmbracelet/bubbletea) + [lipgloss](https://github.com/charmbracelet/lipgloss) + [bubbles](https://github.com/charmbracelet/bubbles).
 
-## Khởi động
+## Launch
 
 ```bash
 yolo
 ```
 
-TUI chiếm toàn bộ terminal. Nhập task ở prompt bên dưới.
+The TUI takes over the entire terminal. Enter a task at the prompt.
 
 ## Layout
 
@@ -19,96 +19,96 @@ TUI chiếm toàn bộ terminal. Nhập task ở prompt bên dưới.
 │                                             │
 │  Board — Multi-agent progress               │
 │                                             │
-│  Hiển thị:                                  │
-│  • Agent hiện tại đang làm gì               │
-│  • Tool calls và results                    │
+│  Shows:                                     │
+│  • What the current agent is doing          │
+│  • Tool calls and results                   │
 │  • State transitions                        │
-│  • Diff viewer (khi edit_file)              │
+│  • Diff viewer (when edit_file runs)        │
 │                                             │
 ├─────────────────────────────────────────────┤
-│  Cost Meter — Token usage + chi phí          │
+│  Cost Meter — Token usage + cost            │
 ├─────────────────────────────────────────────┤
-│  Input Prompt — Gõ task ở đây               │
+│  Input Prompt — Type task here              │
 └─────────────────────────────────────────────┘
 ```
 
 ### Status Bar
 
-Hiển thị FSM state hiện tại:
+Displays the current FSM state:
 
-| State | Hiển thị | Ý nghĩa |
+| State | Display | Meaning |
 |---|---|---|
-| IDLE | `●` | Chờ task |
-| PLAN | `◆` | Lập kế hoạch |
-| THINK | `◉` | LLM đang suy nghĩ |
-| EXEC | `▶` | Đang chạy tool |
-| WAIT_TOOL | `◷` | Chờ tool hoàn thành |
-| VERIFY | `✓` | Đang verify kết quả |
-| DONE | `✔` | Hoàn thành |
+| IDLE | `●` | Waiting for task |
+| PLAN | `◆` | Planning |
+| THINK | `◉` | LLM is thinking |
+| EXEC | `▶` | Running a tool |
+| WAIT_TOOL | `◷` | Waiting for tool to finish |
+| VERIFY | `✓` | Verifying results |
+| DONE | `✔` | Completed |
 
 ### Board
 
-Hiển thị real-time:
-- **Tool calls**: `read_file("main.go")` → kết quả
+Real-time display:
+- **Tool calls**: `read_file("main.go")` → result
 - **State transitions**: THINK → EXEC → WAIT_TOOL
-- **Diff**: khi `edit_file` chạy, hiển thị diff view
-- **Multi-agent**: khi coordination layer phân tách task, board hiển thị nhiều agents
+- **Diff**: when `edit_file` runs, shows a diff view
+- **Multi-agent**: when the coordination layer splits a task, the board shows multiple agents
 
 ### Cost Meter
 
 - Token usage (input + output)
 - Estimated cost (USD)
-- Cập nhật mỗi LLM call
+- Updated on every LLM call
 
-## Tương tác
+## Interaction
 
-### Nhập task
+### Entering a task
 
-1. Gõ task ở input prompt
-2. Nhấn **Enter** để gửi
-3. Agent bắt đầu xử lý
+1. Type the task at the input prompt
+2. Press **Enter** to submit
+3. The agent starts processing
 
 ### HITL Approval
 
-Khi tool cần approval (medium/high risk), TUI hiển thị prompt:
+When a tool needs approval (medium/high risk), the TUI displays a prompt:
 
 ```
 ⚠ bash: "go test ./..."  [Medium Risk]
 Approve? [y/n]
 ```
 
-- **y** → chạy tool
-- **n** → từ chối, agent nhận kết quả "denied by user"
+- **y** → run the tool
+- **n** → reject, agent receives "denied by user" result
 
 ### Interrupt
 
-- **Ctrl+C** — Huỷ task hiện tại, thoát TUI (exit code 130)
-- Agent dừng ở state hiện tại, session không tự save
+- **Ctrl+C** — Cancel the current task, exit the TUI (exit code 130)
+- Agent stops at the current state, session is not auto-saved
 
 ## Headless vs Interactive
 
 | | Interactive (TUI) | Headless |
 |---|---|---|
-| Khởi động | `yolo` | `yolo --headless` |
-| Output | TUI đẹp | JSON lines (stdout) |
-| HITL | Prompt trong TUI | Auto-approve config |
-| Dùng cho | Development hàng ngày | Scripts, CI, tests |
+| Launch | `yolo` | `yolo --headless` |
+| Output | Beautiful TUI | JSON lines (stdout) |
+| HITL | Prompt in TUI | Auto-approve config |
+| Use for | Day-to-day development | Scripts, CI, tests |
 | Input | TTY prompt | Stdin |
 
-### Khi nào dùng TUI
+### When to use TUI
 
-- Development hàng ngày — xem agent làm gì real-time
-- Debug — theo dõi tool calls và state transitions
-- Học cách agent hoạt động
+- Day-to-day development — see what the agent is doing in real-time
+- Debug — track tool calls and state transitions
+- Learn how the agent works
 
-### Khi nào dùng Headless
+### When to use Headless
 
 - CI/CD pipelines
 - Batch automation
-- Golden tests — output deterministic cho regression
-- Scripts — pipe task vào stdin, xử lý JSON output
+- Golden tests — deterministic output for regression
+- Scripts — pipe task into stdin, process JSON output
 
-## Ví dụ session
+## Example session
 
 ```bash
 $ yolo
@@ -119,10 +119,10 @@ $ yolo
 │ ● IDLE                                      │
 ├─────────────────────────────────────────────┤
 │                                             │
-│ > tạo 1 CLI tool tính fibonacci             │
+│ > create a CLI tool that computes fibonacci │
 │                                             │
 ├─────────────────────────────────────────────┤
-│ ◉ THINK — LLM đang suy nghĩ...             │
+│ ◉ THINK — LLM is thinking...               │
 ├─────────────────────────────────────────────┤
 │ ▶ EXEC — list_files()                       │
 │   → 15 files found                          │
@@ -145,9 +145,9 @@ $ yolo
 └─────────────────────────────────────────────┘
 ```
 
-## Xem thêm
+## See also
 
-- [Quickstart](quickstart.md) — chạy lần đầu
-- [Commands & Flags](commands.md) — tất cả flags
-- [Tools Reference](tools.md) — chi tiết tools
-- [Configuration](configuration.md) — cấu hình HITL approval
+- [Quickstart](quickstart.md) — first run
+- [Commands & Flags](commands.md) — all flags
+- [Tools Reference](tools.md) — tool details
+- [Configuration](configuration.md) — HITL approval configuration

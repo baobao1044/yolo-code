@@ -1,6 +1,6 @@
-# Kiến trúc yolo-code
+# yolo-code Architecture
 
-yolo-code được thiết kế theo kiến trúc 12 layers với Event Bus làm backbone. Mỗi layer có trách nhiệm rõ ràng và chỉ phụ thuộc layer thấp hơn.
+yolo-code is designed with a 12-layer architecture using an Event Bus as the backbone. Each layer has clear responsibilities and depends only on lower layers.
 
 ## 12 Layers
 
@@ -39,22 +39,22 @@ yolo-code được thiết kế theo kiến trúc 12 layers với Event Bus làm
 ## Foundation (L1–L3)
 
 ### L1 — Session Manager
-- Quản lý lifecycle: tạo, checkpoint, resume, cancel
-- Undo stack cho rollback
+- Lifecycle management: create, checkpoint, resume, cancel
+- Undo stack for rollback
 - Context-based cancellation
 
 ### L2 — Runtime FSM
 - 12 states, 20 transitions
-- Chạy trên **1 goroutine duy nhất** (single-goroutine drive loop)
+- Runs on **exactly 1 goroutine** (single-goroutine drive loop)
 - State transitions emit `state.change` events
 
-States chính:
+Main states:
 ```
 IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLAN → ... → DONE
 ```
 
 ### L3 — Event Bus
-- Backbone của toàn bộ hệ thống
+- Backbone of the entire system
 - 16 topic groups
 - Fsync-before-fanout (durability)
 - Per-subscriber FIFO
@@ -63,25 +63,25 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 ## Cognition (L4–L6)
 
 ### L4 — Context Engine
-- 7 inputs (files, conversation, tool results, memory, preferences, v.v.)
+- 7 inputs (files, conversation, tool results, memory, preferences, etc.)
 - Relevance scoring: recency + proximity + semantic + centrality + explicit
-- Compression passes khi context vượt budget
+- Compression passes when context exceeds budget
 
 ### L5 — Prompt Compiler
 - Pipeline: dedup → summarize → budget → order
 - Output: XML + Markdown wire format
-- Gửi đến Cognitive Core
+- Sent to the Cognitive Core
 
 ### L6 — Cognitive Core
-- Giao tiếp với LLM provider (OpenAI-compatible API)
-- Multi-turn conversation: Think() → tool_calls → RecordToolResult() → Think() lại
+- Communicates with LLM provider (OpenAI-compatible API)
+- Multi-turn conversation: Think() → tool_calls → RecordToolResult() → Think() again
 - Planner + Reflection + Reasoner
 - Tool Policy + Verify Policy + Cost Controller
 
 ## Action (L7–L9)
 
 ### L7 — Execution Engine
-- Tool Registry: 4 tools tích hợp (list_files, read_file, edit_file, bash)
+- Tool Registry: 4 built-in tools (list_files, read_file, edit_file, bash)
 - Dispatcher + worker goroutines
 - Sandbox: path confinement, command allowlist, network default-deny
 - HITL approval flow (risk-based)
@@ -96,19 +96,19 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 ### L8 — Verification Engine
 - Pipeline: AST → Format → Lint → TypeCheck → Build → Tests → PolicyCheck
 - Verdicts: pass / warn / fail
-- Fail → rollback tự động
+- Fail → automatic rollback
 
 ## Memory (L10)
 
 - 6 types: Working, Conversation, Exec, Repository, Knowledge, Preference
-- Updates CHỈ qua events (event-driven)
+- Updates ONLY via events (event-driven)
 - Pure-Go vector store
 - Per-function chunking
 
 ## Coordination (L11)
 
 - Multi-agent: Orchestrator, Planner, Coder, Reviewer, Tester, Researcher
-- DAG scheduler cho task phức tạp
+- DAG scheduler for complex tasks
 - Rework cap + merge + re-verify
 - Shared cost budget
 
@@ -123,7 +123,7 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 
 ## Import Matrix
 
-Layer cao hơn chỉ được import layer thấp hơn. Không bao giờ ngược.
+Higher layers may only import lower layers. Never the other way around.
 
 ```
 L11 → L6, L7, L8, L9, L10
@@ -132,7 +132,7 @@ L7  → L3
 L8  → L7
 L9  → L7
 L10 → L3
-L3  → (không phụ thuộc layer khác)
+L3  → (no layer dependencies)
 L2  → L1, L3
 L1  → L3
 TUI → L3 (subscribe-only)
@@ -141,28 +141,28 @@ TUI → L3 (subscribe-only)
 ## Data Flow
 
 ```
-1. User gõ task (stdin hoặc TUI)
-2. Session Manager tạo task
-3. Context Engine thu thập context
-4. Prompt Compiler compose prompt
-5. Cognitive Core gọi LLM (Think)
-6. LLM trả về tool_calls hoặc final answer
-7. Nếu tool_calls:
-   a. Dispatcher gửi đến Execution Engine
-   b. Sandbox kiểm tra safety
-   c. HITL approval (nếu cần)
-   d. Tool thực thi → Observation
-   e. RecordToolResult → thêm vào history
-   f. Verification (nếu auto)
-   g. Loop lại bước 5 (HasMore = true)
-8. Nếu final answer:
+1. User types task (stdin or TUI)
+2. Session Manager creates task
+3. Context Engine gathers context
+4. Prompt Compiler composes prompt
+5. Cognitive Core calls LLM (Think)
+6. LLM returns tool_calls or final answer
+7. If tool_calls:
+   a. Dispatcher sends to Execution Engine
+   b. Sandbox checks safety
+   c. HITL approval (if needed)
+   d. Tool executes → Observation
+   e. RecordToolResult → added to history
+   f. Verification (if auto)
+   g. Loop back to step 5 (HasMore = true)
+8. If final answer:
    a. Task completed
    b. Memory updated via events
 ```
 
-## Xem thêm
+## See also
 
-- [Configuration](configuration.md) — cấu hình các layers
-- [Tools Reference](tools.md) — chi tiết 4 tools
-- [RAG & Memory](../rag/) — Context Engine và Memory System sâu hơn
+- [Configuration](configuration.md) — configuring the layers
+- [Tools Reference](tools.md) — details on the 4 tools
+- [RAG & Memory](../rag/) — Context Engine and Memory System in depth
 - Design docs `00-Mindmap.md` → `15-Implementation_Roadmap.md` — technical deep dive

@@ -1,53 +1,53 @@
 # Sprint Status
 
-Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementation_Roodmap.md`.
+Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 
 ## Legend
 
-- ✅ **Completed** — Tất cả deliverables hoàn thành
-- 🔵 **In Progress** — Đang phát triển
-- 🟡 **Partial** — Một phần hoàn thành
-- ⬜ **Planned** — Chưa bắt đầu
+- ✅ **Completed** — All deliverables done
+- 🔵 **In Progress** — Under development
+- 🟡 **Partial** — Partially completed
+- ⬜ **Planned** — Not started
 
 ## Foundation
 
-| Sprint | Tên | Status | Key Deliverables | Notes |
+| Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
-| S1 | Cold Start | ✅ | Session lifecycle, basic CLI, go build | Nền tảng |
-| S2 | Token-to-Screen | ✅ | TUI skeleton (bubbletea), event rendering | TUI cơ bản |
-| S3 | Event Backbone | ✅ | Event Bus (16 topics), fsync-before-fanout, FIFO | Backbone xong |
+| S1 | Cold Start | ✅ | Session lifecycle, basic CLI, go build | Foundation |
+| S2 | Token-to-Screen | ✅ | TUI skeleton (bubbletea), event rendering | Basic TUI |
+| S3 | Event Backbone | ✅ | Event Bus (16 topics), fsync-before-fanout, FIFO | Backbone done |
 
 ## Cognition
 
-| Sprint | Tên | Status | Key Deliverables | Notes |
+| Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
 | S4 | Context Assembly | ✅ | Context Engine (7 inputs), relevance scoring | 5 signals |
 | S5 | Prompt Pipeline | ✅ | Prompt Compiler, dedup→summarize→budget→order | Golden tests |
-| S6 | First Thought | ✅ | Cognitive Core, OpenAI-compatible provider, Think() | LLM kết nối |
+| S6 | First Thought | ✅ | Cognitive Core, OpenAI-compatible provider, Think() | LLM connected |
 
 ## Action
 
-| Sprint | Tên | Status | Key Deliverables | Notes |
+| Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
 | S7 | Tool Stack | ✅ | 4 tools (list_files, read_file, edit_file, bash), Dispatcher | Tool registry |
-| S8 | Patch & Rollback | ✅ | Patch Engine, SEARCH/REPLACE, git checkpoint | Rollback an toàn |
+| S8 | Patch & Rollback | ✅ | Patch Engine, SEARCH/REPLACE, git checkpoint | Safe rollback |
 | S9 | Trust but Verify | ✅ | Verification Engine (AST→Format→Lint→Build→Test), fail→rollback | 7-stage pipeline |
 
 ## Interface + Hardening
 
-| Sprint | Tên | Status | Key Deliverables | Notes |
+| Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
 | S10 | TUI Polish | ✅ | Full TUI: board, cost meter, diff viewer, status bar | Interactive mode |
-| S11 | Sandbox Hardening | ✅ | HITL approval, risk classification, wrapper peeling, red-team suite | An toàn |
+| S11 | Sandbox Hardening | ✅ | HITL approval, risk classification, wrapper peeling, red-team suite | Safety |
 
 ## Integration + Superpowers
 
-| Sprint | Tên | Status | Key Deliverables | Notes |
+| Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
-| S12 | Multi-Agent Integration | 🔵 | Coordination layer, DAG scheduler, orchestrator/coder/reviewer | Đang tích hợp |
-| S13 | Superpowers | 🟡 | RAG, vector store, memory lifecycle, knowledge accumulation | Một phần |
+| S12 | Multi-Agent Integration | 🔵 | Coordination layer, DAG scheduler, orchestrator/coder/reviewer | Integrating |
+| S13 | Superpowers | 🟡 | RAG, vector store, memory lifecycle, knowledge accumulation | Partial |
 
-## Chi tiết Sprint
+## Sprint Details
 
 ### S1 — Cold Start
 - Session Manager: create, checkpoint, resume, cancel
@@ -56,7 +56,7 @@ Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementatio
 
 ### S2 — Token-to-Screen
 - TUI skeleton: bubbletea Program, basic rendering
-- Event→render mapping: state changes hiển thị trên board
+- Event→render mapping: state changes displayed on board
 - Performance budget: S1 cold-start < 100ms, S2 token-to-screen < 50ms
 
 ### S3 — Event Backbone
@@ -67,17 +67,17 @@ Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementatio
 ### S4 — Context Assembly
 - Context Engine: 7 input sources
 - Relevance scoring: recency, proximity, semantic, centrality, explicit
-- Compression passes khi vượt budget
+- Compression passes when exceeding budget
 
 ### S5 — Prompt Pipeline
 - Prompt Compiler: dedup → summarize → budget → order
 - Wire format: XML + Markdown
-- Golden tests: deterministic output cho cùng input
+- Golden tests: deterministic output for same input
 
 ### S6 — First Thought
 - Cognitive Core: `Think()`, `HasMore()`, `RecordToolResult()`
-- OpenAI-compatible provider với SSE streaming
-- Multi-turn agent loop: Think → tool_call → Execute → RecordToolResult → Think lại
+- OpenAI-compatible provider with SSE streaming
+- Multi-turn agent loop: Think → tool_call → Execute → RecordToolResult → Think again
 
 ### S7 — Tool Stack
 - 4 tools: `list_files`, `read_file`, `edit_file`, `bash`
@@ -87,8 +87,8 @@ Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementatio
 
 ### S8 — Patch & Rollback
 - Patch Engine: SEARCH/REPLACE primary + unified diff fallback
-- Git checkpoint trước mỗi edit
-- Rollback mechanism khi verify fail
+- Git checkpoint before each edit
+- Rollback mechanism on verify failure
 
 ### S9 — Trust but Verify
 - 7-stage verification: AST → Format → Lint → TypeCheck → Build → Test → PolicyCheck
@@ -104,11 +104,11 @@ Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementatio
 - HITL approval gate: risk classification (low/medium/high/critical)
 - Wrapper peeling: sudo, env, time
 - Red-team test suite: path escapes, shell escapes, network commands
-- Auto-approve config cho headless mode
+- Auto-approve config for headless mode
 
 ### S12 — Multi-Agent Integration
 - Coordination Layer: Orchestrator, Planner, Coder, Reviewer, Tester, Researcher
-- DAG scheduler cho sub-task parallelism
+- DAG scheduler for sub-task parallelism
 - Rework cap + merge + re-verify
 - Shared cost budget
 
@@ -116,11 +116,11 @@ Tiến trình chi tiết theo từng sprint, cập nhật theo `15-Implementatio
 - Pure-Go vector store
 - Per-function chunking + embedding
 - RAG retrieval flow
-- 6 memory types với event-driven lifecycle
+- 6 memory types with event-driven lifecycle
 - Knowledge accumulation cross-session
 
-## Xem thêm
+## See also
 
 - `15-Implementation_Roadmap.md` — Full roadmap technical spec
-- [Changelog](changelog.md) — Lịch sử thay đổi
-- [Development Workflow](../workflow/development.md) — Sprint cadence và testing
+- [Changelog](changelog.md) — Change history
+- [Development Workflow](../workflow/development.md) — Sprint cadence and testing

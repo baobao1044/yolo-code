@@ -1,29 +1,29 @@
-# Cấu hình yolo-code
+# yolo-code Configuration
 
-## Tổng quan
+## Overview
 
-yolo-code cấu hình qua 3 cơ chế (ưu tiên giảm dần):
+yolo-code is configured via 3 mechanisms (in descending priority):
 
-1. **Command-line flags** — override mọi thứ
-2. **Environment variables** — chính cho deployment
-3. **File `.env`** — tiện cho local development
+1. **Command-line flags** — override everything
+2. **Environment variables** — primary for deployment
+3. **File `.env`** — convenient for local development
 
 ## LLM Provider
 
-### Biến bắt buộc
+### Required variables
 
-| Biến | Mô tả | Ví dụ |
+| Variable | Description | Example |
 |---|---|---|
-| `OPENAI_API_KEY` | API key cho LLM provider | `sk-...` hoặc `wandb_v1_...` |
+| `OPENAI_API_KEY` | API key for the LLM provider | `sk-...` |
 
-### Biến tuỳ chọn
+### Optional variables
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 |---|---|---|
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL của OpenAI-compatible API |
-| `OPENAI_MODEL` | `gpt-4` | Tên model |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible API |
+| `OPENAI_MODEL` | `gpt-4` | Model name |
 
-### Provider phổ biến
+### Popular providers
 
 #### OpenAI
 
@@ -33,17 +33,9 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_MODEL="gpt-4"
 ```
 
-#### Kimi K2.7 (WandB)
-
-```bash
-export OPENAI_API_KEY="wandb_v1_..."
-export OPENAI_BASE_URL="https://api.inference.wandb.ai/v1"
-export OPENAI_MODEL="moonshotai/Kimi-K2.7-Code"
-```
-
 #### Custom provider
 
-Bất kỳ API nào tương thích OpenAI chat completions:
+Any API compatible with OpenAI chat completions:
 
 ```bash
 export OPENAI_API_KEY="your-key"
@@ -53,54 +45,54 @@ export OPENAI_MODEL="your-model"
 
 ## Sandbox
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 |---|---|---|
-| `YOLO_REPO_ROOT` | `.` (cwd) | Thư mục gốc repo — sandbox giới hạn file operations trong này |
+| `YOLO_REPO_ROOT` | `.` (cwd) | Repo root directory — the sandbox confines file operations within this |
 
-Sandbox tự động:
-- Từ chối path escapes (`../../etc/passwd`)
-- Peel wrappers (`sudo`, `env`, `time`) trước khi classify
-- Phân loại commands theo risk
+The sandbox automatically:
+- Rejects path escapes (`../../etc/passwd`)
+- Peels wrappers (`sudo`, `env`, `time`) before classification
+- Classifies commands by risk level
 - Network default-deny
 
 ## HITL Approval
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 |---|---|---|
-| `YOLO_AUTO_APPROVE_MEDIUM` | `false` | Tự approve medium-risk tools (vd: `bash` với lệnh an toàn) |
-| `YOLO_AUTO_APPROVE_HIGH` | `false` | Tự approve high-risk tools (vd: `edit_file`, `bash` với lệnh nguy hiểm) |
+| `YOLO_AUTO_APPROVE_MEDIUM` | `false` | Auto-approve medium-risk tools (e.g. `bash` with safe commands) |
+| `YOLO_AUTO_APPROVE_HIGH` | `false` | Auto-approve high-risk tools (e.g. `edit_file`, `bash` with dangerous commands) |
 
-> **Headless mode**: Nếu không bật auto-approve cho medium/high, agent sẽ deadlock vì không có user để approve. Nên bật khi chạy headless:
+> **Headless mode**: If you don't enable auto-approve for medium/high, the agent will deadlock because there's no user to approve. Enable it when running headless:
 
 ```bash
 export YOLO_AUTO_APPROVE_MEDIUM=true
 export YOLO_AUTO_APPROVE_HIGH=true
 ```
 
-> **Interactive mode**: TUI hiển thị approval prompt, không cần auto-approve.
+> **Interactive mode**: The TUI displays an approval prompt, no need for auto-approve.
 
 ### Risk classification
 
 | Risk | Tools | Behaviour |
 |---|---|---|
-| **Low** | `list_files`, `read_file` | Tự chạy |
-| **Medium** | `bash` (lệnh an toàn) | Cần approval (hoặc auto-approve) |
-| **High** | `edit_file`, `bash` (lệnh nguy hiểm) | Cần approval (hoặc auto-approve) |
-| **Critical** | `bash` (shell escape, rm -rf) | Luôn từ chối |
+| **Low** | `list_files`, `read_file` | Runs automatically |
+| **Medium** | `bash` (safe commands) | Requires approval (or auto-approve) |
+| **High** | `edit_file`, `bash` (dangerous commands) | Requires approval (or auto-approve) |
+| **Critical** | `bash` (shell escape, rm -rf) | Always rejected |
 
 ## Logging
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 |---|---|---|
-| `YOLO_LOG` | (trống) | Đường dẫn file structured log (slog format) |
+| `YOLO_LOG` | (empty) | Structured log file path (slog format) |
 
-Khi set, yolo-code ghi structured log ra file. Log bao gồm:
+When set, yolo-code writes structured logs to the file. Logs include:
 - State transitions
-- Tool calls và results
-- LLM requests/responses (đã redact secrets)
-- Errors và warnings
+- Tool calls and results
+- LLM requests/responses (secrets redacted)
+- Errors and warnings
 
-Ví dụ:
+Example:
 
 ```bash
 export YOLO_LOG=/tmp/yolo-debug.log
@@ -110,7 +102,7 @@ cat /tmp/yolo-debug.log | grep "tool_call"
 
 ## File .env
 
-Copy `.env.example` và sửa:
+Copy `.env.example` and edit:
 
 ```bash
 cp .env.example .env
@@ -130,22 +122,22 @@ YOLO_AUTO_APPROVE_MEDIUM=true
 YOLO_AUTO_APPROVE_HIGH=true
 ```
 
-yolo-code tự động load `.env` từ thư mục hiện tại khi khởi động.
+yolo-code automatically loads `.env` from the current directory on startup.
 
 ## Command-line flags
 
 Flags override environment variables:
 
-| Flag | Env tương ứng | Mô tả |
+| Flag | Env equivalent | Description |
 |---|---|---|
-| `--headless` | — | Chạy không TUI |
+| `--headless` | — | Run without TUI |
 | `--repo <path>` | `YOLO_REPO_ROOT` | Repo root |
-| `--open <files>` | — | Files load vào context |
+| `--open <files>` | — | Files to load into context |
 | `--model <name>` | `OPENAI_MODEL` | Override model |
 | `--base-url <url>` | `OPENAI_BASE_URL` | Override API URL |
-| `--version` | — | In version |
+| `--version` | — | Print version |
 
-## Ví dụ cấu hình
+## Configuration examples
 
 ### Development (local)
 
@@ -165,12 +157,12 @@ yolo  # interactive mode
 
 ```bash
 export OPENAI_API_KEY="${{ secrets.API_KEY }}"
-export OPENAI_BASE_URL="https://api.inference.wandb.ai/v1"
-export OPENAI_MODEL="moonshotai/Kimi-K2.7-Code"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_MODEL="gpt-4"
 export YOLO_AUTO_APPROVE_MEDIUM=true
 export YOLO_AUTO_APPROVE_HIGH=true
 
-echo "sửa bug #42" | yolo --headless --repo /path/to/repo
+echo "fix bug #42" | yolo --headless --repo /path/to/repo
 ```
 
 ### Debug mode
