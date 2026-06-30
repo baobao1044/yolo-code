@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	econtext "github.com/yolo-code/yolo/internal/context"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
 )
 
 // TestWireRenderWrapsGroupInTag pins render(): a group's parts are wrapped in

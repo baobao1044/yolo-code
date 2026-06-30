@@ -40,13 +40,15 @@ func TestTerminalStates(t *testing.T) {
 	}
 }
 
-// TestTransitionTableCoversAll20Edges is the L2-001 headline: the table must
-// contain every transition T1–T20 from File 04 §4.2, no more, no less. A
-// missing or extra edge is an FSM contract regression.
-func TestTransitionTableCoversAll20Edges(t *testing.T) {
+// TestTransitionTableCoversAll21Edges is the L2-001 headline: the table must
+// contain every transition T1–T21 from File 04 §4.2, no more, no less. A
+// missing or extra edge is an FSM contract regression. (T21 — EXECUTE→PLAN on
+// turn_done — was added so a Planner turn whose tool calls are all dispatched
+// hands back to PLAN instead of dead-ending.)
+func TestTransitionTableCoversAll21Edges(t *testing.T) {
 	table := transitionTable()
-	if len(table) != 20 {
-		t.Fatalf("transition table has %d edges, want 20 (T1–T20)", len(table))
+	if len(table) != 21 {
+		t.Fatalf("transition table has %d edges, want 21 (T1–T21)", len(table))
 	}
 	// Every edge must be uniquely keyed by (from, signal) — the FSM dispatches
 	// on (current state, incoming signal), so duplicates are ambiguous.
@@ -60,7 +62,7 @@ func TestTransitionTableCoversAll20Edges(t *testing.T) {
 	}
 }
 
-// TestTransitionEdgesMatchSpec asserts each T1–T20 edge has the (from, signal,
+// TestTransitionEdgesMatchSpec asserts each T1–T21 edge has the (from, signal,
 // to) triple the spec fixes. A drift here changes the agent's observable
 // behavior, so it is caught explicitly.
 func TestTransitionEdgesMatchSpec(t *testing.T) {
@@ -89,6 +91,7 @@ func TestTransitionEdgesMatchSpec(t *testing.T) {
 		{"T18", StateAny, StateCancelled, SigUserCancel},
 		{"T19", StateAny, StateError, SigHardError},
 		{"T20", StateError, StateInit, SigUserAckError},
+		{"T21", StateExecute, StatePlan, SigTurnDone},
 	}
 	table := transitionTable()
 	got := make(map[string]edge, len(table))
@@ -179,5 +182,41 @@ func TestFSMIgnoresTerminalTransitions(t *testing.T) {
 	}
 	if fsm.current() != StateDone {
 		t.Errorf("terminal DONE transitioned to %q; terminal states must not move", fsm.current())
+	}
+}
+
+// TestFSMExecuteTurnDoneGoesToPlan is the regression test for the missing
+// EXECUTE→PLAN edge. When a Planner turn's tool calls are all dispatched,
+// the drive loop fires SigTurnDone (T21) to hand back to PLAN for the next
+// turn. Without T21 the loop dead-ended: SigPlannerAnswer has no edge from
+// EXECUTE (only PLAN→DONE, T4), so transition returned ErrNoTransition and
+// the drive loop terminated the task mid-agent-loop. This test pins both the
+// fix (turn_done resolves) and the old behavior (planner_answer from EXECUTE
+// is now correctly a no-transition, documenting why the signal changed).
+func TestFSMExecuteTurnDoneGoesToPlan(t *testing.T) {
+	fsm := newFSM(StateExecute)
+
+	// T21: EXECUTE --turn_done--> PLAN.
+	from, to, err := fsm.transition(SigTurnDone, "turn_done")
+	if err != nil {
+		t.Fatalf("transition(EXECUTE, turn_done): %v, want nil (T21)", err)
+	}
+	if from != StateExecute || to != StatePlan {
+		t.Errorf("transition(EXECUTE, turn_done) = (%q→%q), want EXECUTE→PLAN", from, to)
+	}
+	if fsm.current() != StatePlan {
+		t.Errorf("current = %q, want PLAN after T21", fsm.current())
+	}
+
+	// The OLD signal from EXECUTE must now return ErrNoTransition — the only
+	// SigPlannerAnswer edge is PLAN→DONE (T4), so firing it from EXECUTE was
+	// the bug. This documents the fix.
+	bad := newFSM(StateExecute)
+	_, _, err = bad.transition(SigPlannerAnswer, "turn_done")
+	if err != ErrNoTransition {
+		t.Errorf("transition(EXECUTE, planner_answer): err = %v, want ErrNoTransition (no edge — T4 is PLAN→DONE only)", err)
+	}
+	if bad.current() != StateExecute {
+		t.Errorf("after failed transition, current = %q, want unchanged EXECUTE", bad.current())
 	}
 }

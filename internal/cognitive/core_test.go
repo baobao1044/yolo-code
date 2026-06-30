@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // ctxWithTask returns a context carrying the given task ID, mirroring what the

@@ -10,7 +10,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // newModelForTest builds a Model with nil seams (fold doesn't need them) so a

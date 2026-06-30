@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	coordpkg "github.com/yolo-code/yolo/internal/coord"
-	"github.com/yolo-code/yolo/internal/event"
+	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // runPlanCtx runs the orchestrator against goal and returns the JSONL event

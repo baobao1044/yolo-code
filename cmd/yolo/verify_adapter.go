@@ -5,9 +5,9 @@ package main
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/runtime"
-	"github.com/yolo-code/yolo/internal/session"
-	"github.com/yolo-code/yolo/internal/verify"
+	"github.com/baobao1044/yolo-code/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/session"
+	"github.com/baobao1044/yolo-code/internal/verify"
 )
 
 // verifyAdapter implements runtime.Verifier using verify.Engine.

@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // labels is the metric label set (string→string). Kept a local type so the

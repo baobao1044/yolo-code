@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	econtext "github.com/yolo-code/yolo/internal/context"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/session"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // corpusPath returns the absolute path to the committed fixture corpus under

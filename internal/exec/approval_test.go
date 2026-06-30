@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // riskyTool is a tool whose Risk returns the given class, so a test can drive

@@ -11,10 +11,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/patch"
-	"github.com/yolo-code/yolo/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/patch"
+	"github.com/baobao1044/yolo-code/internal/runtime"
 )
 
 // patchFS implements patch.Filesystem through the exec sandbox so reads and

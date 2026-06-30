@@ -15,7 +15,7 @@ package memory
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // listenTopics is the set the memory listener subscribes to (§11.2).

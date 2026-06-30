@@ -10,8 +10,8 @@ package cognitive
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/prompt"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // Request is the input to a Provider: the compiled prompt's messages plus the

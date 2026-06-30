@@ -6,18 +6,19 @@
 |---|---|---|
 | `--headless` | `false` | Run without TUI; emit JSON events to stdout |
 | `--repo` | cwd | Repo root for the context engine |
-| `--open` | `""` | Comma-separated list of files to load into context |
 | `--model` | from env | Override model name |
 | `--base-url` | from env | Override API base URL |
+| `--plan <goal>` | — | Multi-agent orchestrator for a complex goal |
 | `--version` | n/a | Print version and exit |
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
-| `OPENAI_API_KEY` | API key for the LLM provider (required) |
-| `OPENAI_BASE_URL` | Base URL of the OpenAI-compatible API |
-| `OPENAI_MODEL` | Model name (e.g. `gpt-4`) |
+| `YOLO_API_KEY` | API key for the LLM provider (canonical) |
+| `OPENAI_API_KEY` | Fallback API key, used only if `YOLO_API_KEY` is unset |
+| `YOLO_BASE_URL` | Base URL of the OpenAI-compatible API |
+| `YOLO_MODEL` | Model name (default `gpt-4o`) |
 | `YOLO_LOG` | Structured log file path |
 | `YOLO_AUTO_APPROVE_MEDIUM` | `"true"` = auto-approve medium-risk tools |
 | `YOLO_AUTO_APPROVE_HIGH` | `"true"` = auto-approve high-risk tools |

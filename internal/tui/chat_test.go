@@ -15,7 +15,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestFoldThinkingAccumulates pins §14.5: llm.thinking deltas append to the

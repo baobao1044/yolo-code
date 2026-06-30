@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // secretTool emits known secret shapes in stdout so the redactor must mask

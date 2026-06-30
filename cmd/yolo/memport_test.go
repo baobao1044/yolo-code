@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	econtext "github.com/yolo-code/yolo/internal/context"
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/memory"
-	"github.com/yolo-code/yolo/internal/prompt"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/memory"
+	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
 // TestRecalledPreferenceSurfacesInPrompt is the Sprint 7 exit bar: a preference

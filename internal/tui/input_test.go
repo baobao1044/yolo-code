@@ -16,8 +16,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/baobao1044/yolo-code/internal/event"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/yolo-code/yolo/internal/event"
 )
 
 // fakePublisher captures the last event published so a test asserts which user.*

@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/yolo-code/yolo/internal/exec"
-	"github.com/yolo-code/yolo/internal/patch"
-	"github.com/yolo-code/yolo/internal/runtime"
+	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/patch"
+	"github.com/baobao1044/yolo-code/internal/runtime"
 )
 
 // execAdapter implements runtime.Executor using exec.Engine. The "patch" tool

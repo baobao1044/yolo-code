@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // Pricer turns a token count into dollars. The real one (per-model pricing,
@@ -204,6 +204,34 @@ func (c *Cost) ReflectionAllowed(id session.TaskID) bool {
 	}
 	if !tc.deadline.IsZero() && time.Now().After(tc.deadline) {
 		return false
+	}
+	return true
+}
+
+// MultiCandidateAllowed reports whether the cost budget still permits
+// multi-candidate patch generation (File 07 §7.6.2). After MaxLoops is reached
+// the agent degrades to single-candidate (only-verify-adjacent) mode, one rung
+// before reflection is disabled entirely; after MaxReflections it degrades
+// further to a single forced candidate (autosubmit). It mirrors
+// ReflectionAllowed's loop threshold + the spend/time hard caps (multi-candidate
+// is a strict subset of reflection — if reflection is hard-aborted, so is
+// multi-candidate) and reuses the same internal counters, adding the
+// MaxReflections rung.
+func (c *Cost) MultiCandidateAllowed(id session.TaskID) bool {
+	tc := c.task(id)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if tc.loops >= c.config.MaxLoops {
+		return false // single-candidate (only-verify-adjacent) mode
+	}
+	if tc.dollars >= c.config.MaxDollars && c.config.MaxDollars > 0 {
+		return false // spend cap — reflection itself is off
+	}
+	if !tc.deadline.IsZero() && time.Now().After(tc.deadline) {
+		return false // time cap — reflection itself is off
+	}
+	if tc.reflections >= c.config.MaxReflections {
+		return false // single forced candidate (autosubmit, §7.6.4)
 	}
 	return true
 }

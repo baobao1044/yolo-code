@@ -31,11 +31,11 @@ import (
 //     under this rule — but it's a transitive of bubbletea, never a direct
 //     import the TUI writes, so it would only appear if a file explicitly
 //     imported it, which the allowlist rejects.
-//   - the event seam: github.com/yolo-code/yolo/internal/event
+//   - the event seam: github.com/baobao1044/yolo-code/internal/event
 //   - the renderer: github.com/charmbracelet/bubbletea, lipgloss, bubbles
 func allowedImport(p string) bool {
 	switch p {
-	case "github.com/yolo-code/yolo/internal/event",
+	case "github.com/baobao1044/yolo-code/internal/event",
 		"github.com/charmbracelet/bubbletea",
 		"github.com/charmbracelet/lipgloss",
 		"github.com/charmbracelet/bubbles",
@@ -98,9 +98,9 @@ func TestTUIImportsAreAllowlisted(t *testing.T) {
 // this unit assertion is the regression guard for the helper itself.)
 func TestTUIImportsRejectForbiddenImport(t *testing.T) {
 	for _, p := range []string{
-		"github.com/yolo-code/yolo/internal/cognitive",
-		"github.com/yolo-code/yolo/internal/runtime",
-		"github.com/yolo-code/yolo/internal/infra",
+		"github.com/baobao1044/yolo-code/internal/cognitive",
+		"github.com/baobao1044/yolo-code/internal/runtime",
+		"github.com/baobao1044/yolo-code/internal/infra",
 		"example.com/some/third/party",
 		"golang.org/x/sys", // a transitive of bubbletea, but not an allowed DIRECT import
 	} {

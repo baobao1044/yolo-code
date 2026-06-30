@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // toolCognitive emits one tool call on the first Think and a final answer on

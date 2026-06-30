@@ -20,7 +20,7 @@ package context
 import (
 	"time"
 
-	"github.com/yolo-code/yolo/internal/session"
+	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // PartKind classifies a context part by its source.

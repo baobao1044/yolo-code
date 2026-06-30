@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestChunkFileSplitsAtFunctionBoundaries: a Go file with two functions splits

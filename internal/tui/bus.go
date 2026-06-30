@@ -14,7 +14,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TUI-001 message set (File 14 §14.2.2). Every message is one of: an envelope

@@ -1,7 +1,7 @@
 package prompt
 
 import (
-	econtext "github.com/yolo-code/yolo/internal/context"
+	econtext "github.com/baobao1044/yolo-code/internal/context"
 )
 
 // Trimmer applies the §6.7 trimming passes to over-budget groups. Sprint 2

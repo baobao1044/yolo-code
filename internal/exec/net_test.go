@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // netTool is a fake tool that declares Net:true and records whether its Run

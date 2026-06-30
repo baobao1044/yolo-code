@@ -15,7 +15,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestFoldCostDegradedSetsLevel pins §14.7.5: cost.degraded sets the

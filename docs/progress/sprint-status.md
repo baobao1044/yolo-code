@@ -46,6 +46,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 |---|---|---|---|---|
 | S12 | Multi-Agent Integration | 🔵 | Coordination layer, DAG scheduler, orchestrator/coder/reviewer | Integrating |
 | S13 | Superpowers | 🟡 | RAG, vector store, memory lifecycle, knowledge accumulation | Partial |
+| S14 | Scope Loop & Dynamic Workflow | ✅ | `internal/scope` (controller, W2/W3, MCTS) + `internal/workflow` (bugfix/feature/refactor), runtime ports, adapters, multi-candidate reflection | Landed |
 
 ## Sprint Details
 
@@ -118,6 +119,13 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 - RAG retrieval flow
 - 6 memory types with event-driven lifecycle
 - Knowledge accumulation cross-session
+
+### S14 — Scope Loop & Dynamic Workflow
+- `internal/scope`: scope-level state machine (Task/Repo/File/Function/Edit/Verify), W2 tool-gating, W3 expand/contract on verify feedback, anti-loop Memory, budget-bounded Scope MCTS
+- `internal/workflow`: per-task workflow selection (bugfix/feature/refactor), heuristic Classifier, conditional branching (multi-hypothesis, repair loop, scope contract, model degrade)
+- Runtime ports `ScopeController` + `WorkflowEngine`, noop stubs, drive-loop integration (VERIFY scope consult, PLAN workflow consult, EXECUTE scope-gated tool broadening)
+- Multi-candidate reflection (`ReflectMulti`, `RerankCandidates`) + `ReflectionMemory` + cost-degrade ladder (`MultiCandidateAllowed`)
+- Production blockers fixed: module path, env vars, `.env` auto-load, CLI flags, grep tool schema, missing `EXECUTE → PLAN` FSM edge
 
 ## See also
 

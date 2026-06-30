@@ -65,9 +65,9 @@ cp .env.example .env
 Example with OpenAI:
 
 ```bash
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export OPENAI_MODEL="gpt-4"
+export YOLO_API_KEY="sk-..."
+export YOLO_BASE_URL="https://api.openai.com/v1"
+export YOLO_MODEL="gpt-4o"
 ```
 
 ### 2. Run headless
@@ -90,9 +90,10 @@ Type a task at the prompt. The TUI displays a multi-agent board, cost meter, dif
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | API key for the LLM provider |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible API |
-| `OPENAI_MODEL` | `gpt-4` | Model name |
+| `YOLO_API_KEY` | — | API key for the LLM provider (canonical) |
+| `OPENAI_API_KEY` | — | Fallback API key, used only if `YOLO_API_KEY` is unset |
+| `YOLO_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible API |
+| `YOLO_MODEL` | `gpt-4o` | Model name |
 | `YOLO_LOG` | — | Structured log file path |
 | `YOLO_AUTO_APPROVE_MEDIUM` | `false` | Auto-approve medium-risk tools |
 | `YOLO_AUTO_APPROVE_HIGH` | `false` | Auto-approve high-risk tools |

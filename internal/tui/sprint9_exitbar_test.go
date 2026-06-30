@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // canonicalRun is the event sequence a single "fix the bug in auth.go" task

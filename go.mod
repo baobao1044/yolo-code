@@ -1,4 +1,4 @@
-module github.com/yolo-code/yolo
+module github.com/baobao1044/yolo-code
 
 go 1.26
 

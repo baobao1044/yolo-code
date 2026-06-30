@@ -57,6 +57,13 @@ func init() {
 	Register("coord.review.verdict", func() Event { return &ReviewVerdictEvent{} })
 	Register("coord.test.report", func() Event { return &TestReportEvent{} })
 
+	// L-scope: Scope.
+	Register("scope.enter", func() Event { return &ScopeEnterEvent{} })
+	Register("scope.transition", func() Event { return &ScopeTransitionEvent{} })
+
+	// L-workflow: Dynamic Workflow.
+	Register("workflow.selected", func() Event { return &WorkflowSelectedEvent{} })
+
 	// Error (any layer).
 	Register("error", func() Event { return &ErrorEvent{} })
 }

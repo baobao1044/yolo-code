@@ -11,7 +11,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestFoldPatchAppliedOpensDiffViewer pins §14.7.3: a patch.applied event opens

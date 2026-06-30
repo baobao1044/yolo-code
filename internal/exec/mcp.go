@@ -15,7 +15,7 @@ package exec
 import (
 	"context"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // ToolSpec is the descriptor an MCP server advertises for one of its tools

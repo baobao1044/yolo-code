@@ -1,6 +1,6 @@
 # Tools Reference
 
-yolo-code has 4 built-in tools. The Cognitive Core (LLM) calls tools via the **OpenAI native function calling API**.
+yolo-code has 5 built-in tools. The Cognitive Core (LLM) calls tools via the **OpenAI native function calling API**.
 
 ## Overview
 
@@ -8,6 +8,7 @@ yolo-code has 4 built-in tools. The Cognitive Core (LLM) calls tools via the **O
 |---|---|---|---|---|
 | `list_files` | — | Low | Yes | List all files in the repo |
 | `read_file` | `file` | Low | Yes | Read file contents |
+| `grep` | `pattern`, `path?` | Low | Yes | Search file contents for a regex pattern |
 | `edit_file` | `file`, `content` | High | Yes | Overwrite file contents (creates if not exists) |
 | `bash` | `command` | Medium–Critical | Yes | Run a shell command |
 
@@ -85,6 +86,50 @@ Reads file contents.
 {
   "name": "read_file",
   "arguments": { "file": "internal/cognitive/core.go" }
+}
+```
+
+## grep
+
+Searches file contents for a regex pattern across the repo. Essential for locating code patterns.
+
+### Schema
+
+```json
+{
+  "name": "grep",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "pattern": {
+        "type": "string",
+        "description": "regex pattern to search for"
+      },
+      "path": {
+        "type": "string",
+        "description": "optional directory or file to search in (default: repo root)"
+      }
+    },
+    "required": ["pattern"]
+  }
+}
+```
+
+### Behaviour
+
+- Uses `ripgrep` (`rg`) when available, falls back to POSIX `grep`
+- Returns matching lines with file paths and line numbers (`-n`), two lines of context
+- Caps results (max 50 matches) and truncates long lines (`--max-columns 200`) to keep output bounded
+- No matches is not an error — returns an empty result with summary `"no matches"`
+- **Risk**: Low — read-only
+- **Cost**: Cheap — a single search invocation
+
+### Example call
+
+```json
+{
+  "name": "grep",
+  "arguments": { "pattern": "func.*Core", "path": "internal" }
 }
 ```
 
@@ -211,15 +256,16 @@ export YOLO_AUTO_APPROVE_HIGH=true     # edit_file, bash (dangerous commands)
 
 ## Tool Calling API
 
-yolo-code uses **OpenAI native function calling** (not inline token format). When creating a provider request, 4 tool definitions are included:
+yolo-code uses **OpenAI native function calling** (not inline token format). When creating a provider request, 5 tool definitions are included:
 
 ```json
 {
-  "model": "gpt-4",
+  "model": "gpt-4o",
   "messages": [...],
   "tools": [
     { "type": "function", "function": { "name": "list_files", ... } },
     { "type": "function", "function": { "name": "read_file", ... } },
+    { "type": "function", "function": { "name": "grep", ... } },
     { "type": "function", "function": { "name": "edit_file", ... } },
     { "type": "function", "function": { "name": "bash", ... } }
   ]

@@ -32,13 +32,13 @@ import (
 //
 // Sprint 10 uses event + stdlib; the broader set is the ceiling.
 var coordAllowlist = []string{
-	"github.com/yolo-code/yolo/internal/event",
-	"github.com/yolo-code/yolo/internal/cognitive",
-	"github.com/yolo-code/yolo/internal/exec",
-	"github.com/yolo-code/yolo/internal/verify",
-	"github.com/yolo-code/yolo/internal/patch",
-	"github.com/yolo-code/yolo/internal/memory",
-	"github.com/yolo-code/yolo/internal/infra",
+	"github.com/baobao1044/yolo-code/internal/event",
+	"github.com/baobao1044/yolo-code/internal/cognitive",
+	"github.com/baobao1044/yolo-code/internal/exec",
+	"github.com/baobao1044/yolo-code/internal/verify",
+	"github.com/baobao1044/yolo-code/internal/patch",
+	"github.com/baobao1044/yolo-code/internal/memory",
+	"github.com/baobao1044/yolo-code/internal/infra",
 }
 
 // coordAllowedImport reports whether an import path is on the coord allowlist
@@ -104,11 +104,11 @@ func TestCoordImportsAreAllowlisted(t *testing.T) {
 // can't silently widen the seam.
 func TestCoordImportsRejectForbiddenImport(t *testing.T) {
 	for _, p := range []string{
-		"github.com/yolo-code/yolo/internal/runtime",
-		"github.com/yolo-code/yolo/internal/session",
-		"github.com/yolo-code/yolo/internal/context",
-		"github.com/yolo-code/yolo/internal/prompt",
-		"github.com/yolo-code/yolo/internal/tui",
+		"github.com/baobao1044/yolo-code/internal/runtime",
+		"github.com/baobao1044/yolo-code/internal/session",
+		"github.com/baobao1044/yolo-code/internal/context",
+		"github.com/baobao1044/yolo-code/internal/prompt",
+		"github.com/baobao1044/yolo-code/internal/tui",
 		"example.com/some/third/party",
 		"golang.org/x/sys",
 	} {

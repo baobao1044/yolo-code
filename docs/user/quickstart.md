@@ -5,7 +5,7 @@
 ### Option 1: go install (fastest)
 
 ```bash
-go install github.com/yolo-code/yolo/cmd/yolo@latest
+go install github.com/baobao1044/yolo-code/cmd/yolo@latest
 ```
 
 The binary will be at `$GOPATH/bin/yolo` (or `$HOME/go/bin/yolo`).

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/prompt"
+	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
 // TestStubDeterministicSameInputSameTokenSequence is the L6-007 / S5 exit

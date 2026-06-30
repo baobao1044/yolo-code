@@ -14,23 +14,26 @@ yolo-code is configured via 3 mechanisms (in descending priority):
 
 | Variable | Description | Example |
 |---|---|---|
-| `OPENAI_API_KEY` | API key for the LLM provider | `sk-...` |
+| `YOLO_API_KEY` | API key for the LLM provider (canonical) | `sk-...` |
+
+> `OPENAI_API_KEY` is read as a fallback ONLY if `YOLO_API_KEY` is unset.
 
 ### Optional variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible API |
-| `OPENAI_MODEL` | `gpt-4` | Model name |
+| `YOLO_BASE_URL` | `https://api.openai.com/v1` | Base URL of the OpenAI-compatible API |
+| `YOLO_MODEL` | `gpt-4o` | Model name |
+| `YOLO_WINDOW` | `128000` | Context window size (tokens) |
 
 ### Popular providers
 
 #### OpenAI
 
 ```bash
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export OPENAI_MODEL="gpt-4"
+export YOLO_API_KEY="sk-..."
+export YOLO_BASE_URL="https://api.openai.com/v1"
+export YOLO_MODEL="gpt-4o"
 ```
 
 #### Custom provider
@@ -38,9 +41,9 @@ export OPENAI_MODEL="gpt-4"
 Any API compatible with OpenAI chat completions:
 
 ```bash
-export OPENAI_API_KEY="your-key"
-export OPENAI_BASE_URL="https://your-api.com/v1"
-export OPENAI_MODEL="your-model"
+export YOLO_API_KEY="your-key"
+export YOLO_BASE_URL="https://your-api.com/v1"
+export YOLO_MODEL="your-model"
 ```
 
 ## Sandbox
@@ -75,7 +78,7 @@ export YOLO_AUTO_APPROVE_HIGH=true
 
 | Risk | Tools | Behaviour |
 |---|---|---|
-| **Low** | `list_files`, `read_file` | Runs automatically |
+| **Low** | `list_files`, `read_file`, `grep` | Runs automatically |
 | **Medium** | `bash` (safe commands) | Requires approval (or auto-approve) |
 | **High** | `edit_file`, `bash` (dangerous commands) | Requires approval (or auto-approve) |
 | **Critical** | `bash` (shell escape, rm -rf) | Always rejected |
@@ -110,9 +113,9 @@ cp .env.example .env
 
 ```ini
 # LLM Provider
-OPENAI_API_KEY=sk-...
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4
+YOLO_API_KEY=sk-...
+YOLO_BASE_URL=https://api.openai.com/v1
+YOLO_MODEL=gpt-4o
 
 # Logging
 YOLO_LOG=
@@ -132,9 +135,9 @@ Flags override environment variables:
 |---|---|---|
 | `--headless` | — | Run without TUI |
 | `--repo <path>` | `YOLO_REPO_ROOT` | Repo root |
-| `--open <files>` | — | Files to load into context |
-| `--model <name>` | `OPENAI_MODEL` | Override model |
-| `--base-url <url>` | `OPENAI_BASE_URL` | Override API URL |
+| `--model <name>` | `YOLO_MODEL` | Override model |
+| `--base-url <url>` | `YOLO_BASE_URL` | Override API URL |
+| `--plan <goal>` | — | Multi-agent orchestrator for a complex goal |
 | `--version` | — | Print version |
 
 ## Configuration examples
@@ -143,8 +146,8 @@ Flags override environment variables:
 
 ```bash
 # .env
-OPENAI_API_KEY=sk-abc123
-OPENAI_MODEL=gpt-4
+YOLO_API_KEY=sk-abc123
+YOLO_MODEL=gpt-4o
 YOLO_AUTO_APPROVE_MEDIUM=true
 YOLO_AUTO_APPROVE_HIGH=true
 ```
@@ -156,9 +159,9 @@ yolo  # interactive mode
 ### CI/CD (headless)
 
 ```bash
-export OPENAI_API_KEY="${{ secrets.API_KEY }}"
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export OPENAI_MODEL="gpt-4"
+export YOLO_API_KEY="${{ secrets.API_KEY }}"
+export YOLO_BASE_URL="https://api.openai.com/v1"
+export YOLO_MODEL="gpt-4o"
 export YOLO_AUTO_APPROVE_MEDIUM=true
 export YOLO_AUTO_APPROVE_HIGH=true
 

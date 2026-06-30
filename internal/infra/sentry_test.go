@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yolo-code/yolo/internal/event"
+	"github.com/baobao1044/yolo-code/internal/event"
 )
 
 // TestSentryNoDSNReturnsNilHub pins §13.6.1 opt-in: an empty DSN yields a nil
