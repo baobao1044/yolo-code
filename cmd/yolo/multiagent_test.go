@@ -51,7 +51,13 @@ func TestMultiAgentEndToEndPatchReviewTestMerge(t *testing.T) {
 	var (
 		assign, codeReady, review, testReport, planDone, costIncurred bool
 	)
+	// done signals when the subscriber goroutine has drained the channel, so
+	// the main goroutine reads the flags only after all writes are complete
+	// (fixes a pre-existing race: the subscriber wrote flags while the main
+	// goroutine read them with only a time.Sleep for synchronization).
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for env := range ch {
 			switch env.Evt.Type() {
 			case "coord.task.assign":
@@ -76,7 +82,7 @@ func TestMultiAgentEndToEndPatchReviewTestMerge(t *testing.T) {
 		t.Fatalf("orchestrator Run: %v", err)
 	}
 	_ = bus.Close()
-	time.Sleep(20 * time.Millisecond)
+	<-done // wait for the subscriber to finish before reading the flags
 
 	if !assign {
 		t.Error("missing coord.task.assign")

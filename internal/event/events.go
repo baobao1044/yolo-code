@@ -162,13 +162,16 @@ type PatchFile struct {
 // PatchAppliedEvent announces a successful apply (File 05 §5.4.4, File 10
 // §10.6): the diff summary — files touched, insertions, deletions — so the
 // transcript/TUI can show what changed. The per-file Files list is
-// path-sorted (deterministic); Insertions/Deletions are the totals.
+// path-sorted (deterministic); Insertions/Deletions are the totals. Diff is
+// the rendered unified-diff string (Phase D) for the TUI diff viewer; it's
+// omitempty so headless/stub consumers that don't read it stay byte-identical.
 type PatchAppliedEvent struct {
 	Task       TaskID          `json:"task"`
 	Snapshot   json.RawMessage `json:"snapshot"`
 	Files      []PatchFile     `json:"files"`
 	Insertions int             `json:"insertions"`
 	Deletions  int             `json:"deletions"`
+	Diff       string          `json:"diff,omitempty"`
 }
 
 func (e *PatchAppliedEvent) Type() Topic      { return "patch.applied" }
@@ -443,3 +446,48 @@ type WorkflowSelectedEvent struct {
 
 func (e *WorkflowSelectedEvent) Type() Topic      { return "workflow.selected" }
 func (e *WorkflowSelectedEvent) CausalID() TaskID { return TaskID(e.Task) }
+
+// --- L-memory: user preference (File 11 §11.5.2) ---
+
+// UserPreferenceEvent is published when the agent (or user) records a
+// preference to remember (e.g. "always use conventional commits"). Key is the
+// preference name; Value the stored text. The memory listener subscribes and
+// routes it to the Preference store (the one user-editable sub-store, §11.2).
+type UserPreferenceEvent struct {
+	Task  string `json:"task,omitempty"`
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+func (e *UserPreferenceEvent) Type() Topic      { return "user.preference" }
+func (e *UserPreferenceEvent) CausalID() TaskID { return TaskID(e.Task) }
+
+// --- L-user: slash commands (TUI interactive) ---
+//
+// UserCommandEvent carries a parsed slash command (e.g. /model, /provider) from
+// the TUI to the driver, which performs the runtime action (swap provider) and
+// responds with a CommandResponseEvent. The TUI intercepts /help, /clear,
+// /theme locally (no event); /model, /provider, /status go through the bus so
+// the driver can rebuild the cognitive Core. Command is the verb ("model",
+// "provider", "status"); Args is the argument (model name, provider name, or
+// empty for "list").
+type UserCommandEvent struct {
+	Command string `json:"command"`
+	Args    string `json:"args,omitempty"`
+}
+
+func (e *UserCommandEvent) Type() Topic      { return "user.command" }
+func (e *UserCommandEvent) CausalID() TaskID { return "" }
+
+// CommandResponseEvent carries the driver's text response to a slash command
+// (e.g. "model: gpt-4o", "provider: groq (llama-3.3-70b-versatile)"). The TUI
+// folds it into the chat pane as a system-role message. Topic is
+// "command.response" (NOT under "user." — this is a driver→TUI response, not a
+// user action; the TUI subscribes to it separately so it doesn't loop back
+// through the driver's "user.>" subscription).
+type CommandResponseEvent struct {
+	Text string `json:"text"`
+}
+
+func (e *CommandResponseEvent) Type() Topic      { return "command.response" }
+func (e *CommandResponseEvent) CausalID() TaskID { return "" }

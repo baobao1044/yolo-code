@@ -17,6 +17,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	cog "github.com/baobao1044/yolo-code/internal/cognitive"
 	econtext "github.com/baobao1044/yolo-code/internal/context"
@@ -59,6 +60,7 @@ type headlessDeps struct {
 	context  runtime.ContextBuilder
 	prompt   runtime.PromptCompiler
 	cog      runtime.CognitiveCore
+	cogCore  *cog.Core // raw cognitive.Core for TUI slash-command provider swap (nil in headless)
 	exec     runtime.Executor
 	verify   runtime.Verifier
 	patcher  runtime.Patcher
@@ -67,6 +69,7 @@ type headlessDeps struct {
 	open     []string
 	window   int
 	memory   *memory.Store
+	memDir   string // temp dir backing memory; cleaned up by runHeadlessDeps
 	bus      *event.Bus
 	infra    *infra.Infra // L12-009: caller Start'd it on deps.bus; runHeadlessDeps owns the Stop.
 }
@@ -98,6 +101,20 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 	}
 	if busOwned {
 		defer func() { _ = bus.Close() }()
+	}
+	// L10-006: when the default path created a memory Store (memDir set), own
+	// its lifecycle here. memStore.Close waits for the listener drain to end,
+	// which happens once the bus is closed (the explicit bus.Close below, not
+	// the busOwned defer — the default path shares the caller's bus). The defer
+	// runs after that close, so Close returns promptly; then the temp dir is
+	// removed. A test that injects its own memory (memDir empty) owns both.
+	if deps != nil && deps.memory != nil && deps.memDir != "" {
+		memStore := deps.memory
+		memDir := deps.memDir
+		defer func() {
+			_ = memStore.Close()
+			_ = os.RemoveAll(memDir)
+		}()
 	}
 
 	smgr := session.New(session.Deps{
@@ -159,8 +176,22 @@ func runHeadlessDeps(ctx context.Context, stdin io.Reader, seed int64, deps *hea
 	go func() {
 		defer wg.Done()
 		enc := json.NewEncoder(&out)
+		seq := uint64(0) // normalized: the Nth event in the transcript (not bus Seq)
 		for env := range ch {
-			_ = enc.Encode(projectEnvelope(env))
+			// memory.update is observational telemetry from the L10 listener
+			// goroutine; its interleaving with the spine is non-deterministic
+			// (the listener is a separate goroutine that races with the drive
+			// loop). Excluding it keeps the headless transcript byte-identical
+			// across runs (S5) — the transcript pins the agent's decision spine,
+			// not memory telemetry. The memory listener still learns (the TUI
+			// sees memory.update via its own subscriber).
+			if env.Evt.Type() == "memory.update" {
+				continue
+			}
+			seq++
+			proj := projectEnvelope(env)
+			proj.Seq = seq // normalize: 1, 2, 3, … independent of bus-assigned seq
+			_ = enc.Encode(proj)
 		}
 	}()
 
@@ -274,25 +305,55 @@ func defaultHeadlessDeps(bus *event.Bus) (*headlessDeps, error) {
 	verifyAd := &verifyAdapter{engine: newVerifyEngine(sandbox)}
 	restorer := newShadowRestorer(snap)
 
+	// L10-006: open the memory Store wired to the shared bus so its listener is
+	// the event subscriber (the only sub-store writer, §11.2). The SemanticStore
+	// gets the sandbox-confined FS so Reindex can read a path's new content on
+	// patch.applied. Cold-start indexing runs best-effort next (Phase C); a nil
+	// FS (sandbox absent) leaves Reindex a no-op but the store still answers
+	// Preferences/Project. A temp dir backs the JSON persistence (preference,
+	// knowledge cross-session) so the repo tree isn't polluted.
+	memDir, err := os.MkdirTemp("", "yolo-memory-*")
+	if err != nil {
+		return nil, err
+	}
+	memStore, err := memory.Open(memory.Deps{
+		Root: memDir,
+		Bus:  bus,
+		FS:   newMemoryFS(sandbox),
+	})
+	if err != nil {
+		_ = os.RemoveAll(memDir)
+		return nil, err
+	}
+	// Cold-start: index the repo so the first turn already has RAG signal
+	// (§11.7.5). Best-effort — a walk error or empty repo leaves the store
+	// empty (Retrieve returns nil, the prompt just omits the <rag> group). The
+	// timeout bounds a huge repo; the walk is deterministic so two runs of the
+	// same tree produce byte-identical indexes (S5).
+	indexCtx, indexCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, _ = memory.IndexRepo(indexCtx, memStore.Semantic(), repo)
+	indexCancel()
+
+	cogCore, cogAd := newCognitiveCore(resolveProvider(), bus)
 	return &headlessDeps{
-		context:  contextAdapter{eng: econtext.New(econtext.Deps{Bus: bus, Repo: repo})},
+		context:  contextAdapter{eng: econtext.New(econtext.Deps{Bus: bus, Repo: repo, Memory: contextMemoryAdapter{store: memStore}})},
 		prompt:   promptAdapter{comp: prompt.New(nil, bus)},
-		cog:      newRealCognitiveCore(resolveProvider(), bus),
+		cog:      cogAd,
+		cogCore:  cogCore,
 		exec:     execAd,
 		verify:   verifyAd,
 		patcher:  &patchAdapter{engine: patchEng},
 		restorer: restorer,
 		repo:     repo,
+		memory:   memStore,
+		memDir:   memDir,
 		bus:      bus,
 	}, nil
 }
 
-// resolveProvider returns the OpenAI-compatible provider when YOLO_API_KEY
-// (or OPENAI_API_KEY) is set, otherwise falls back to the deterministic stub
+// resolveProvider returns the provider selected by YOLO_PROVIDER (preset
+// registry) or YOLO_API_KEY (env-only), falling back to the deterministic stub
 // so the tool works offline / in golden tests.
 func resolveProvider() cog.Provider {
-	if p := cog.OpenAICompatProviderFromEnv(); p != nil {
-		return p
-	}
-	return cog.NewStubProvider(128_000)
+	return cog.ResolveProvider()
 }

@@ -14,6 +14,8 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/cursor"
+	"github.com/charmbracelet/bubbles/textinput"
 
 	"github.com/baobao1044/yolo-code/internal/event"
 )
@@ -44,22 +46,28 @@ type approvalView struct {
 	risk    string
 }
 
-// diffView is the diff viewer state (TUI-004). PatchAppliedEvent has no
-// diff-hunks text (spec gap: only Files+counts), so this holds the file list +
-// counts, not hunks.
+// diffView is the diff viewer state (TUI-004). PatchAppliedEvent carries the
+// file list + counts + the rendered unified-diff string (Phase D); the viewer
+// shows real hunks when Diff is present, falling back to the file list + counts.
 type diffView struct {
 	files      []event.PatchFile
 	insertions int
 	deletions  int
 	reason     string // set by verification.failed
+	diff       string // rendered unified-diff hunks (Phase D)
 }
 
-// costView is the cost-meter rail (TUI-005). Degraded+abort only (spec gap:
-// no cost.spend/cost.loop events in the catalog).
+// costView is the cost-meter rail (TUI-005). Phase D adds dollars + tokensEst
+// accumulated from real events (CostIncurredEvent.Dollars + llm.token deltas).
+// dollars is exact (per-tool-call rate from the cost publisher); tokensEst is a
+// rough estimate (len(delta)/4 ≈ 4 chars per token — the provider doesn't parse
+// usage on the live path). level/aborted stay for the degradation ladder.
 type costView struct {
 	level       string
 	aborted     bool
 	abortReason string
+	dollars     float64 // accumulated from cost.incurred (real per-tool-call rate)
+	tokensEst   int     // rough: len(llm.token delta)/4, accumulated
 }
 
 // boardView is the multi-agent board (TUI-009). Hidden until coord.plan.ready.
@@ -123,11 +131,11 @@ type Model struct {
 	// spinner (TUI-007)
 	spinnerFrame int
 
-	// input (TUI-006): the current text in the input line. The production
-	// handleInput reads this from a bubbles/textinput widget; the pure
-	// transition stores it on the model so the test drives it without a widget.
-	// Reset to "" on submit (optimistic echo → user.submit).
-	inputText string
+	// input (TUI-006): a bubbles/textinput widget (Phase B). It owns the cursor,
+	// history, and ←/→/Home/End/Ctrl-A/E/word-delete — the hand-rolled char
+	// append is gone. inputValue() reads the widget's text (backward-compat for
+	// the pure test path); Reset() clears it on submit.
+	input textinput.Model
 
 	// scroll (D1): scrollOffset > 0 means scrolled up from the bottom;
 	// 0 = auto-scroll to latest message.
@@ -147,11 +155,32 @@ type Model struct {
 // how fold tests drive the pure projection without a bus. Init/Update/View
 // (the bubbletea surface) live in run.go.
 func newModel(sub <-chan event.Envelope, pub EventPublisher) Model {
+	ti := textinput.New()
+	ti.Prompt = "> "
+	ti.Focus() // accept keyboard input + show cursor (Phase B)
+	// Reduced-motion (Phase C): a steady cursor instead of a blinking one.
+	if theme.noMotion {
+		ti.Cursor.SetMode(cursor.CursorStatic)
+	}
 	return Model{
 		focus:     paneChat,
 		sub:       sub,
 		publisher: pub,
+		input:     ti,
 	}
+}
+
+// inputValue returns the input line's current text (Phase B backward-compat).
+// It reads from the bubbles/textinput widget; callers that used m.inputText
+// now call m.inputValue() so the pure test path stays widget-agnostic.
+func (m Model) inputValue() string {
+	return m.input.Value()
+}
+
+// setInput replaces the input line's text and moves the cursor to the end
+// (Phase B backward-compat for tests that drive the widget directly).
+func (m *Model) setInput(s string) {
+	m.input.SetValue(s)
 }
 
 // Init launches the first busWatcher + the first 60 Hz tick so the bridge

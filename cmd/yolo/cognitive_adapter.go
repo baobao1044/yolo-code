@@ -82,3 +82,13 @@ func newRealCognitiveCore(provider cog.Provider, bus *event.Bus) runtime.Cogniti
 	tools := []string{"list_files", "read_file", "edit_file", "bash", "grep"}
 	return &cognitiveAdapter{core: cog.New(provider, bus, tools...)}
 }
+
+// newCognitiveCore builds the raw cognitive.Core (provider + bus + tools) and
+// returns it alongside the CognitiveCore adapter. The raw *cog.Core lets the
+// TUI driver swap providers at runtime (slash command /model, /provider); the
+// adapter is what the runtime consumes.
+func newCognitiveCore(provider cog.Provider, bus *event.Bus) (*cog.Core, runtime.CognitiveCore) {
+	tools := []string{"list_files", "read_file", "edit_file", "bash", "grep"}
+	core := cog.New(provider, bus, tools...)
+	return core, &cognitiveAdapter{core: core}
+}

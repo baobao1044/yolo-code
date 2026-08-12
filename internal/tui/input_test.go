@@ -70,10 +70,9 @@ func TestHandleInputEnterSubmits(t *testing.T) {
 	pub := &fakePublisher{}
 	m := newModelForTest()
 	m.publisher = pub
-	// Simulate typed text (the input widget would hold this; TUI-006 stores it
-	// on a field the production handleInput reads from the textinput, but the
-	// pure transition takes the value via the model).
-	m.inputText = "fix the bug"
+	// Simulate typed text via the textinput widget (Phase B): SetValue seeds
+	// the buffer the production handleInput reads via m.input.Value().
+	m.input.SetValue("fix the bug")
 
 	m2, cmd := handleInput(m, keyMsg("enter"))
 	runCmd(t, cmd)
@@ -92,9 +91,9 @@ func TestHandleInputEnterSubmits(t *testing.T) {
 	if len(m2.messages) == 0 || m2.messages[len(m2.messages)-1].role != "user" {
 		t.Errorf("expected a user-role echo message, got %v", m2.messages)
 	}
-	// Input cleared after submit.
-	if m2.inputText != "" {
-		t.Errorf("inputText = %q after submit, want \"\" (cleared)", m2.inputText)
+	// Input cleared after submit (textinput.Reset() empties the buffer).
+	if m2.input.Value() != "" {
+		t.Errorf("input = %q after submit, want \"\" (cleared)", m2.input.Value())
 	}
 	_ = cmd // the publish happens via a returned tea.Cmd; not asserted here
 }
@@ -262,5 +261,69 @@ func TestHandleInputDoesNotValidate(t *testing.T) {
 	runCmd(t, cmd)
 	if pub.count != 0 {
 		t.Errorf("published %d with no active task, want 0 (Esc with no task is a no-op publish — §14.8.2 says the runtime's handler is a no-op, but the TUI still must not fabricate a cancel for a phantom task)", pub.count)
+	}
+}
+
+// --- Phase B: textinput widget integration ---
+
+// TestUpdateTextinputAcceptsPrintable pins Phase B: a printable keystroke
+// routes to the textinput widget (via m.input.Update), not the hand-rolled
+// char append. The widget owns the cursor + buffer.
+func TestUpdateTextinputAcceptsPrintable(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+
+	m2, _ := m.Update(keyMsg("h"))
+	m2, _ = m2.Update(keyMsg("i"))
+	mm := m2.(Model)
+	if mm.input.Value() != "hi" {
+		t.Errorf("after typing 'hi', input.Value() = %q, want \"hi\"", mm.input.Value())
+	}
+}
+
+// TestUpdateApprovalNonTrapping pins Phase B: when an approval is pending,
+// scroll/help/quit keys still work (non-trapping) — only typing is suppressed.
+func TestUpdateApprovalNonTrapping(t *testing.T) {
+	pub := &fakePublisher{}
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	m.publisher = pub
+	m.taskID = "t-1"
+	m.approval = &approvalView{id: "apr_1"}
+	m.scrollOffset = 0
+
+	// PgUp should scroll even during approval.
+	m2, _ := m.Update(keyMsg("pgup"))
+	mm := m2.(Model)
+	if mm.scrollOffset != 10 {
+		t.Errorf("pgup during approval: scrollOffset = %d, want 10 (non-trapping)", mm.scrollOffset)
+	}
+
+	// ? should toggle help even during approval.
+	m3, _ := mm.Update(keyMsg("?"))
+	mm3 := m3.(Model)
+	if !mm3.showHelp {
+		t.Error("? during approval did not toggle help (non-trapping)")
+	}
+}
+
+// TestUpdateApprovalSuppressesTyping pins Phase B: when an approval is pending,
+// printable keystrokes are suppressed (don't append to the input buffer).
+func TestUpdateApprovalSuppressesTyping(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	m.taskID = "t-1"
+	m.approval = &approvalView{id: "apr_1"}
+
+	m2, _ := m.Update(keyMsg("x"))
+	mm := m2.(Model)
+	if mm.input.Value() != "" {
+		t.Errorf("typing during approval: input.Value() = %q, want \"\" (suppressed)", mm.input.Value())
 	}
 }

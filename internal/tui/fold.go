@@ -44,9 +44,12 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.streaming = true
 	case *event.TokenEvent:
 		// llm.token deltas accumulate into the live assistant bubble (separate
-		// from thinking). Flushed to messages on assistant.message.
+		// from thinking). Flushed to messages on assistant.message. Phase D:
+		// also accumulate a rough token estimate (≈4 chars/token; the provider
+		// doesn't parse usage on the live path) for the cost meter.
 		m.liveAssistant += e.Delta
 		m.streaming = true
+		m.cost.tokensEst += len(e.Delta) / 4
 	case *event.AssistantMessageEvent:
 		// Finalize the assistant bubble (File 14 §14.5): append the final Text
 		// as a message, clear the live + thinking bubbles, end streaming. The
@@ -138,14 +141,12 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 
 	// --- Diff viewer (TUI-004, File 14 §14.7.3) ---
 	case *event.PatchAppliedEvent:
-		// Open the diff viewer focused, with the file list + counts. The viewer
-		// replaces any previous diff (§14.6.1: the latest change is what the
-		// user reviews, not a stack). PatchAppliedEvent has NO diff-hunks text
-		// (spec gap: only Snapshot + Files + Insertions/Deletions) — the viewer
-		// renders the file list + counts (hunk-colored in View), not hunks.
-		// Edits come only from patch.applied events (§14.1.1); the viewer never
-		// edits.
-		m.diff = &diffView{files: e.Files, insertions: e.Insertions, deletions: e.Deletions}
+		// Open the diff viewer focused, with the file list + counts + the
+		// rendered diff hunks (Phase D: PatchAppliedEvent now carries the
+		// unified-diff string). The viewer replaces any previous diff (§14.6.1:
+		// the latest change is what the user reviews, not a stack). Edits come
+		// only from patch.applied events (§14.1.1); the viewer never edits.
+		m.diff = &diffView{files: e.Files, insertions: e.Insertions, deletions: e.Deletions, diff: e.Diff}
 		m.focus = paneDiff
 	case *event.VerificationFailedEvent:
 		// Open the diff viewer focused on the failing file, reason staged so the
@@ -154,13 +155,13 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.focus = paneDiff
 	case *event.VerificationStageEvent:
 		// Per-stage pass/fail indicator appended to chat.
-		icon := successStyle.Render("✔")
+		icon := theme.success.Render("✔")
 		if e.Status == "fail" {
-			icon = errorStyle.Render("✘")
+			icon = theme.errorStyle.Render("✘")
 		} else if e.Status == "warn" {
-			icon = warningStyle.Render("⚠")
+			icon = theme.warning.Render("⚠")
 		} else if e.Status == "skip" {
-			icon = mutedStyle.Render("○")
+			icon = theme.muted.Render("○")
 		}
 		text := e.Stage
 		if e.Detail != "" {
@@ -169,6 +170,10 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.messages = append(m.messages, messageView{role: "verification", text: icon + " " + text})
 
 	// --- Cost meter (TUI-005, File 14 §14.7.5) ---
+	case *event.CostIncurredEvent:
+		// Phase D: accumulate real per-tool-call dollars (from the cost
+		// publisher's rate table). The rail shows "cost: $X.XX · ~N tok".
+		m.cost.dollars += e.Dollars
 	case *event.CostDegradedEvent:
 		// Set the degradation level the rail displays. Spec gap: File 14 §14.5
 		// reads cost.degraded.level, but CostDegradedEvent's field is `Stage`
@@ -236,6 +241,11 @@ func fold(m Model, env event.Envelope) (Model, tea.Cmd) {
 		m.approval = nil
 	case *event.UserRejectEvent:
 		m.approval = nil
+	case *event.CommandResponseEvent:
+		// Phase 4 slash commands: the driver's text response folds into the
+		// chat pane as a system-role message (e.g. "model: gpt-4o", "provider:
+		// groq (llama-3.3-70b-versatile)").
+		m.messages = append(m.messages, messageView{role: "system", text: e.Text})
 	}
 	return m, relaunchWatcher(m)
 }

@@ -103,14 +103,23 @@ func (s *StubProvider) respond(req Request) []Chunk {
 	}
 }
 
-// lastUser returns the content of the last user message, or "" if none. The
-// stub's response is a function of this — the input that drives the golden
-// trace.
+// lastUser returns the content of the last *bare* user message, or "" if none.
+// The stub's response is a function of this — the input that drives the golden
+// trace. Retrieved context (files/rag rendered under <…> section tags, File 06
+// §6.6.2) is emitted with role "user" but is semantically context, not the
+// user's input — so it is skipped (a code chunk saying "List the files" must
+// not be mistaken for the user asking to list files). A bare user message is
+// one whose content doesn't start with a wire-format section tag.
 func lastUser(msgs []prompt.Message) string {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			return msgs[i].Content
+		if msgs[i].Role != "user" {
+			continue
 		}
+		c := msgs[i].Content
+		if len(c) > 0 && c[0] == '<' {
+			continue // rendered context section (<files>, <rag>, <project>, …)
+		}
+		return c
 	}
 	return ""
 }

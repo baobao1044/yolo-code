@@ -88,8 +88,9 @@ func (c *Compiler) applyBudget(pkg econtext.ContextPackage) econtext.ContextPack
 	userTok := c.groupTokens(pkg.User)
 	retrTok := c.counter.Count(render("<files>", append(append([]econtext.Part{}, pkg.Files...), append(pkg.Graph, pkg.Diagnostics...)...)))
 	convTok := c.groupTokens(pkg.Conversation)
+	ragTok := c.counter.Count(render("<rag>", pkg.RAG))
 
-	total := sysTok + projTok + userTok + convTok + retrTok
+	total := sysTok + projTok + userTok + convTok + retrTok + ragTok
 	if total <= b.Window {
 		return pkg // fits; no trimming needed
 	}
@@ -97,14 +98,17 @@ func (c *Compiler) applyBudget(pkg econtext.ContextPackage) econtext.ContextPack
 	// Pass A — trim retrieved files under their slot. Files are re-readable from
 	// disk next turn, so they're the cheapest to drop. Keep @-referenced files
 	// (§6.7.3) by keeping the highest-scored ones (Layer 4 already ranks them
-	// first within the group).
+	// first within the group). RAG chunks trim under their own slot next — they
+	// re-retrieve from the vector store next turn, so they're also cheap to drop.
 	pkg.Files = c.trimGroup(pkg.Files, b.Files)
 	pkg.Graph = c.trimGroup(pkg.Graph, 0) // graph/diagnostics have no slot; drop fully if over
 	pkg.Diagnostics = c.trimGroup(pkg.Diagnostics, 0)
+	pkg.RAG = c.trimGroup(pkg.RAG, b.RAG)
 	retrTok = c.groupTokens(pkg.Files) + c.groupTokens(pkg.Graph) + c.groupTokens(pkg.Diagnostics)
+	ragTok = c.groupTokens(pkg.RAG)
 
 	// Recompute; if it fits now, done.
-	total = sysTok + projTok + userTok + convTok + retrTok
+	total = sysTok + projTok + userTok + convTok + retrTok + ragTok
 	if total <= b.Window {
 		return pkg
 	}
@@ -113,7 +117,7 @@ func (c *Compiler) applyBudget(pkg econtext.ContextPackage) econtext.ContextPack
 	// The conversation is ordered newest-first by Layer 4, so keep the front.
 	// Reserve whatever room remains for conversation after the never-trimmed and
 	// already-trimmed groups.
-	remaining := b.Window - sysTok - projTok - userTok - retrTok
+	remaining := b.Window - sysTok - projTok - userTok - retrTok - ragTok
 	if remaining < 0 {
 		remaining = 0
 	}
@@ -209,6 +213,14 @@ func (c *Compiler) order(pkg econtext.ContextPackage) []Message {
 	retrieved = append(retrieved, pkg.Diagnostics...)
 	if len(retrieved) > 0 {
 		msgs = append(msgs, Message{Role: "user", Content: render("<files>", retrieved)})
+	}
+	// 4b. RAG: semantically retrieved code chunks (File 11 §11.6), role "user",
+	// under a stable <rag> tag so the parser round-trips it. Each chunk carries
+	// path/name/kind in Attr (set by the SemanticStore adapter); render emits
+	// them as a labeled block. Omitted when the store returned no hits (the
+	// noop-memory path).
+	if len(pkg.RAG) > 0 {
+		msgs = append(msgs, Message{Role: "user", Content: render("<rag>", pkg.RAG)})
 	}
 	// 5. Conversation turns, each its own message with the role the part
 	// carries in Attr (default "assistant" — history records the agent's turns).

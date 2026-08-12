@@ -21,38 +21,36 @@ import (
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Approval mode only answers y/n; all other keystrokes are ignored.
-		if m.approval != nil {
+		s := msg.String()
+
+		// Command keys route to handleInput in BOTH approval and normal mode
+		// (Phase B: the approval trap is gone — ?, scroll, esc, quit all still
+		// work while an approval is pending, only typing is suppressed).
+		switch s {
+		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r", "q", "?", "tab", "pgup", "pgdown":
 			return handleInput(m, msg)
+		case "y", "n":
+			// During approval y/n approve/reject; outside approval they're
+			// ordinary printable characters → fall through to textinput.
+			if m.approval != nil {
+				return handleInput(m, msg)
+			}
 		}
 
-		s := msg.String()
-		switch s {
-		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r", "q", "?", "tab":
-			return handleInput(m, msg)
-		case "pgup":
-			m.scrollOffset += 10
-			return m, nil
-		case "pgdown":
-			m.scrollOffset -= 10
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
-			return m, nil
-		case "backspace":
-			if len(m.inputText) > 0 {
-				r := []rune(m.inputText)
-				m.inputText = string(r[:len(r)-1])
-			}
-			return m, nil
-		default:
-			// Treat single printable runes as typed input. The production path
-			// could use bubbles/textinput; this is enough to drive submit.
-			if len(s) == 1 && s[0] >= ' ' && s[0] <= '~' {
-				m.inputText += s
-			}
+		// Non-command key while an approval is pending: suppress typing, but
+		// don't swallow scroll/help/quit — those were already handled above.
+		if m.approval != nil {
 			return m, nil
 		}
+
+		// Everything else (printable runes, backspace, ←/→, Home/End,
+		// Ctrl-A/E/W, Delete) goes to the textinput widget, which owns the
+		// cursor and editing semantics. This replaces the hand-rolled char
+		// append that dropped non-ASCII and lacked cursor/word-delete.
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
 	case busMsg:
 		// A bus event folds into render state + re-launches the watcher. TUI-007
 		// coalesces the repaint: fold accumulates every delta, and the 60 Hz

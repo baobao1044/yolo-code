@@ -34,6 +34,7 @@ const (
 	KindGraph        PartKind = "graph"        // relevant symbols/edges
 	KindDiagnostics  PartKind = "diagnostics"  // current errors
 	KindPreferences  PartKind = "preferences"  // user prefs
+	KindRAG          PartKind = "rag"          // retrieved code chunks (semantic)
 )
 
 // Group names the seven ordered groups of a ContextPackage (File 06 §6.4).
@@ -73,6 +74,7 @@ type Budget struct {
 	Project      int
 	Conversation int
 	Files        int
+	RAG          int
 	User         int
 }
 
@@ -90,6 +92,7 @@ type ContextPackage struct {
 	Graph        []Part
 	Diagnostics  []Part
 	Preferences  []Part
+	RAG          []Part // retrieved code chunks (semantic, File 11 §11.6)
 	User         []Part // the current request (task goal); ordered third
 	Budget       Budget
 }

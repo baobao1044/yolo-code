@@ -33,6 +33,7 @@ import (
 //     imported it, which the allowlist rejects.
 //   - the event seam: github.com/baobao1044/yolo-code/internal/event
 //   - the renderer: github.com/charmbracelet/bubbletea, lipgloss, bubbles
+//     (sub-packages: textinput, viewport, cursor)
 func allowedImport(p string) bool {
 	switch p {
 	case "github.com/baobao1044/yolo-code/internal/event",
@@ -40,7 +41,8 @@ func allowedImport(p string) bool {
 		"github.com/charmbracelet/lipgloss",
 		"github.com/charmbracelet/bubbles",
 		"github.com/charmbracelet/bubbles/textinput",
-		"github.com/charmbracelet/bubbles/viewport":
+		"github.com/charmbracelet/bubbles/viewport",
+		"github.com/charmbracelet/bubbles/cursor":
 		return true
 	}
 	// stdlib: first segment has no dot (e.g. "context", "go/parser").

@@ -2,6 +2,26 @@
 
 Important changes to yolo-code, updated over time.
 
+## 2026-08-12
+
+### S13 Superpowers — RAG & Memory wired into the agent path
+- Wired the memory Store into all three composition-root sites (headless `defaultHeadlessDeps`, coord `buildRuntimeDeps`, TUI via `defaultHeadlessDeps`): `memory.Open` with a sandbox-confined `memory.FS`, `contextMemoryAdapter` behind the Context Engine's `Memory` port, and cold-start `IndexRepo`. Production no longer runs with `noopMemory`.
+- Context Engine: added `KindRAG` + `RAG` group, `Memory.Retrieve` port method, gather RAG after Preferences, rank keeps cosine score for RAG parts, budget slot (8% off Files), compression assigns RAG.
+- Prompt Compiler: new `<rag>` wire tag (after `<files>`, before conversation), budget trimming for RAG.
+- Cold-start indexing (`internal/memory/index.go`): `IndexRepo` walks the repo (deterministic order), skips `.git`/`vendor`/`node_modules`/`__pycache__`/`dist`/`.cache`/`build`/dotfiles/oversized files, chunks each source file, `BulkInsert` in one locked pass. Reindex on `patch.applied` reads the new content via the wired FS.
+- Memory lifecycle complete:
+  - Working memory: `task`/`state` fields, `SetTask`/`SetState`/`Clear` (§11.3.1).
+  - Exec history: rolling window (last 50), monotonic per-task seq counter.
+  - SemanticStore: `Delete(id)`, `Size()`, `Evict(capacity)` (LRU by lastAccess), `SetThreshold(θ)`, `lastAccess` bump on Retrieve.
+  - Knowledge insight store (`internal/memory/knowledge.go`): distinct from code-chunk RAG, fed by `verify.fail`/`verify.pass`/`task.completed`, dedup, cross-session JSON persistence.
+  - Listener widened to 9 topics (`task.started`/`state.change`/`verification.failed`/`verification.stage`/`user.preference` added); slow I/O (Persist/Reindex) offloaded to background goroutines tracked by `Store.bg` so `Close` waits.
+  - `Store.Open` eager-loads Knowledge + Preferences (cross-session recall).
+- New `user.preference` event (`internal/event/events.go`) routes agent-originated preferences through the listener (§11.5.2).
+- Determinism preserved (S5): `memory.update` telemetry is excluded from the headless transcript projection (the listener goroutine's interleaving is non-deterministic); transcript seq is normalized to the event's position. Golden transcript hash unchanged. The TUI still sees `memory.update` via its own subscriber.
+- Fixed pre-existing test races surfaced by `-race` (`recordingSub` happens-before in `TestHeuristicPlannerDrivesOrchestrator`, `allCh` drain in `TestRuntimeAgentRunnerSpawnsCoder`).
+- Tests added: `knowledge_test.go`, `index_test.go`, `lifecycle_test.go`, RAG extensions in `semantic_test.go`, `engine_test.go` (gather RAG), `pipeline_test.go` (`<rag>` tag), listener extensions in `listener_test.go`.
+- Notes: each coord per-todo runtime gets its own memory store (temp dir); Knowledge isn't shared across roles — a documented S12 limitation, not S13 scope. Hash embedder kept (air-gapped); a real OpenAI/Ollama embedder plugs behind the `Embedder` interface in a later sprint. HNSW deferred (brute-force cosine sufficient for small corpora).
+
 ## 2026-06-28
 
 ### Documentation overhaul

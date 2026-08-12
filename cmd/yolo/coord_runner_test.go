@@ -27,7 +27,9 @@ func TestRuntimeAgentRunnerSpawnsCoder(t *testing.T) {
 	// Capture the runtime-level events emitted by the coder agent too.
 	allCh := bus.Subscribe(event.Topic(">"))
 	var sawContextBuilt, sawAssistantMsg bool
+	allDone := make(chan struct{})
 	go func() {
+		defer close(allDone)
 		for env := range allCh {
 			if env.Evt.Type() == "context.built" {
 				sawContextBuilt = true
@@ -57,6 +59,7 @@ func TestRuntimeAgentRunnerSpawnsCoder(t *testing.T) {
 	}
 	_ = bus.Close()
 	rec.close() // wait for drain to finish before reading rec.types
+	<-allDone   // wait for the allCh drain goroutine to finish before reading its vars
 
 	if len(rec.types) == 0 || rec.types[0] != "coord.plan.ready" {
 		t.Fatalf("first event = %v, want coord.plan.ready", rec.types)

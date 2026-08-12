@@ -45,7 +45,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 | Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
 | S12 | Multi-Agent Integration | 🔵 | Coordination layer, DAG scheduler, orchestrator/coder/reviewer | Integrating |
-| S13 | Superpowers | 🟡 | RAG, vector store, memory lifecycle, knowledge accumulation | Partial |
+| S13 | Superpowers | ✅ | RAG, vector store, memory lifecycle, knowledge accumulation | Wired into agent path |
 | S14 | Scope Loop & Dynamic Workflow | ✅ | `internal/scope` (controller, W2/W3, MCTS) + `internal/workflow` (bugfix/feature/refactor), runtime ports, adapters, multi-candidate reflection | Landed |
 
 ## Sprint Details
@@ -100,6 +100,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 - Full TUI: board, cost meter, diff viewer, status bar
 - Interactive input prompt
 - Headless mode (JSON events)
+- **TUI Overhaul (4 fixes)**: theme system (4 palettes + NO_COLOR + reduced-motion); bubbles/textinput widget (real cursor, ←/→/Home/End/Ctrl-A/E/Ctrl-W, UTF-8); approval non-trapping (scroll/help/quit still work during approval); onboarding empty-state + grouped help overlay + color-blind status tags; diff viewer real hunks (UnifiedDiff + PatchAppliedEvent.Diff); cost meter accumulate (dollars + rough token estimate).
 
 ### S11 — Sandbox Hardening
 - HITL approval gate: risk classification (low/medium/high/critical)
@@ -114,11 +115,17 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 - Shared cost budget
 
 ### S13 — Superpowers
-- Pure-Go vector store
-- Per-function chunking + embedding
-- RAG retrieval flow
-- 6 memory types with event-driven lifecycle
-- Knowledge accumulation cross-session
+- Pure-Go vector store (brute-force cosine, dim 384 default; Embedder interface for swap)
+- Per-function chunking (go/parser) + fixed-window fallback for non-Go
+- Cold-start repo indexing (IndexRepo walk, skip vendored/cache/oversized, deterministic)
+- RAG retrieval flow wired into Context Engine (KindRAG group, `<rag>` prompt tag, budget slot)
+- 6 memory types with event-driven lifecycle (listener subscribes 9 topics)
+- Knowledge insight store (distinct from code-chunk RAG) + cross-session persistence
+- Working memory task/state + clear-on-completed
+- Exec history rolling window (last 50) with monotonic seq
+- VectorStore Delete/Size/Evict (LRU)/SetThreshold
+- Composition root wires memory.Open + SemanticStore+FS into headless/coord/TUI paths
+- Determinism preserved: memory.update telemetry excluded from headless projection; seq normalized
 
 ### S14 — Scope Loop & Dynamic Workflow
 - `internal/scope`: scope-level state machine (Task/Repo/File/Function/Edit/Verify), W2 tool-gating, W3 expand/contract on verify feedback, anti-loop Memory, budget-bounded Scope MCTS

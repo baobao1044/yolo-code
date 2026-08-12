@@ -38,7 +38,13 @@ func New(provider Provider, bus *event.Bus, tools ...string) *Core {
 	return &Core{provider: provider, bus: bus, tools: tools}
 }
 
-// Think runs one Planner turn (File 07 §7.2.2): stream the provider, publish
+// SetProvider swaps the LLM provider at runtime (slash command /model,
+// /provider). It keeps the conversation history + tools so a mid-session model
+// switch preserves context. The caller (driver) must ensure no task is running
+// (d.busy guard) before calling — Think reads provider in the drive goroutine.
+func (c *Core) SetProvider(p Provider) {
+	c.provider = p
+}
 // token/thinking deltas as events, accumulate the text, and return a parsed
 // Turn (final answer or tool calls). The task ID is threaded via context
 // (session.WithTaskID) so TokenEvent carries the right Task without changing

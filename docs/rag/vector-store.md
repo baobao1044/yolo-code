@@ -2,6 +2,8 @@
 
 yolo-code uses a pure-Go vector store for semantic search — no external services required (Pinecone, Weaviate, etc.).
 
+> **Implementation status (S13, 2026-08-12):** the SemanticStore is a brute-force cosine store (HNSW deferred — sufficient for small corpora). The default embedder is a deterministic hash embedder (dim 384, the spec's floor); a real OpenAI/Ollama embedder plugs behind the `Embedder` interface. Cold-start indexing (`IndexRepo`) walks the repo at session open and `BulkInsert`s chunks. `Retrieve` is wired into the Context Engine via `Memory.Retrieve` → `<rag>` prompt group. `Delete`/`Size`/`Evict` (LRU)/`SetThreshold` are implemented. See `internal/memory/semantic.go`, `internal/memory/embed.go`, `internal/memory/chunk.go`, `internal/memory/index.go`.
+
 ## Overview
 
 ```

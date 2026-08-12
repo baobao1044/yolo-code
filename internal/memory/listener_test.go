@@ -168,3 +168,107 @@ func TestListenerNoPublicDirectMutators(t *testing.T) {
 	s, _ := newListenerStore(t)
 	_ = s // no public mutator to call; the invariant is "none exist"
 }
+
+// TestListenerSetsTaskOnTaskStarted: task.started → Working.SetTask (§11.3.1).
+func TestListenerSetsTaskOnTaskStarted(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	bus.Publish(context.Background(), &event.TaskStartedEvent{
+		Task: "t_9", Session: "s_1", Goal: "write a fibonacci CLI",
+	})
+
+	ups := drain(t, ch, 100*time.Millisecond)
+	if len(ups) == 0 || ups[0].Store != "working" {
+		t.Fatalf("memory.update = %+v, want 1 with store \"working\"", ups)
+	}
+	if got := s.Working().Task(); got != "write a fibonacci CLI" {
+		t.Errorf("Working.Task = %q, want the goal", got)
+	}
+}
+
+// TestListenerSetsStateOnStateChange: state.change → Working.SetState (§11.3.1).
+func TestListenerSetsStateOnStateChange(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	bus.Publish(context.Background(), &event.StateChangeEvent{
+		Task: "t_9", From: "plan", To: "exec", Why: "verified",
+	})
+
+	ups := drain(t, ch, 100*time.Millisecond)
+	if len(ups) == 0 || ups[0].Store != "working" {
+		t.Fatalf("memory.update = %+v, want 1 with store \"working\"", ups)
+	}
+	if got := s.Working().State(); got != "exec" {
+		t.Errorf("Working.State = %q, want exec", got)
+	}
+}
+
+// TestListenerRecordsInsightOnVerificationFailed: verification.failed →
+// Knowledge.Record (§11.5.1).
+func TestListenerRecordsInsightOnVerificationFailed(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	bus.Publish(context.Background(), &event.VerificationFailedEvent{
+		Task: "t_9", Reason: "Race detector requires CGO",
+	})
+
+	ups := drain(t, ch, 100*time.Millisecond)
+	if len(ups) == 0 || ups[0].Store != "knowledge" {
+		t.Fatalf("memory.update = %+v, want 1 with store \"knowledge\"", ups)
+	}
+	all := s.Insights().All()
+	if len(all) != 1 || all[0].Text != "Race detector requires CGO" {
+		t.Errorf("Insights = %+v, want one Race-detector insight", all)
+	}
+}
+
+// TestListenerSetsPreferenceOnUserPreference: user.preference → Preference.Set
+// (§11.5.2 — agent-originated updates are still event-driven).
+func TestListenerSetsPreferenceOnUserPreference(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	bus.Publish(context.Background(), &event.UserPreferenceEvent{
+		Key: "style", Value: "conventional commits",
+	})
+
+	ups := drain(t, ch, 100*time.Millisecond)
+	if len(ups) == 0 || ups[0].Store != "preference" {
+		t.Fatalf("memory.update = %+v, want 1 with store \"preference\"", ups)
+	}
+	val, err := s.Preferences().Get(context.Background(), "style")
+	if err != nil || val != "conventional commits" {
+		t.Errorf("Preferences.Get(style) = %q, err=%v, want \"conventional commits\"", val, err)
+	}
+}
+
+// TestListenerClearsWorkingOnTaskCompleted: task.completed → Working.Clear +
+// Knowledge.Record + persists Conversation/Exec/Knowledge (§11.3.1 + §11.5.1).
+func TestListenerClearsWorkingOnTaskCompleted(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	// Prime Working so Clear is observable.
+	s.Working().SetTask("a goal")
+	s.Working().SetState("exec")
+
+	bus.Publish(context.Background(), &event.TaskCompletedEvent{Task: "t_done"})
+
+	ups := drain(t, ch, 100*time.Millisecond)
+	if len(ups) == 0 || ups[0].Store != "working" {
+		t.Fatalf("memory.update = %+v, want 1 with store \"working\"", ups)
+	}
+	if got := s.Working().Task(); got != "" {
+		t.Errorf("after task.completed, Working.Task = %q, want empty (cleared)", got)
+	}
+	if got := s.Working().State(); got != "" {
+		t.Errorf("after task.completed, Working.State = %q, want empty (cleared)", got)
+	}
+	// A success insight should have been recorded.
+	if all := s.Insights().All(); len(all) == 0 {
+		t.Error("task.completed recorded no Knowledge insight, want a success pattern")
+	}
+}

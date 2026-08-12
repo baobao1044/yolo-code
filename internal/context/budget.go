@@ -7,7 +7,10 @@ package context
 
 // allocate splits a token window into the §6.6.1 budget. Reserve is 15% with a
 // 1024 floor; system is capped at 12% (4096 max); project at 8% (2048 max);
-// conversation gets 45%; files 25%; user the remainder.
+// conversation gets 45%; files 17%; RAG 8%; user the remainder. RAG (retrieved
+// code chunks, File 11 §11.6) takes a slice off files — semantic recall is
+// cheaper to recompute than re-reading disk, so RAG trims before Files when
+// over budget.
 func allocate(window int) Budget {
 	reserve := window * 15 / 100
 	if reserve < 1024 {
@@ -26,13 +29,14 @@ func allocate(window int) Budget {
 		proj = 2048
 	}
 	conv := avail * 45 / 100
-	files := avail * 25 / 100
-	user := avail - sys - proj - conv - files
+	files := avail * 17 / 100
+	rag := avail * 8 / 100
+	user := avail - sys - proj - conv - files - rag
 	if user < 0 {
 		user = 0
 	}
 	return Budget{
 		Window: window, Reserve: reserve,
-		System: sys, Project: proj, Conversation: conv, Files: files, User: user,
+		System: sys, Project: proj, Conversation: conv, Files: files, RAG: rag, User: user,
 	}
 }

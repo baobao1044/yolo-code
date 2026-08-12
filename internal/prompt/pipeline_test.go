@@ -123,9 +123,11 @@ func TestCompileIncludesRetrievedFilesContext(t *testing.T) {
 // prompt's total token count does not exceed the budget window. With a small
 // window and oversized file content, applyBudget must trim so the total fits.
 // The min-message guard ensures a broken (empty) pipeline can't spuriously
-// pass the budget check.
+// pass the budget check. Window=300 accommodates the system prompt (which
+// carries the tool schema + rules + coding strategy — ~210 tokens) plus a
+// small file body, while still forcing trimming of larger inputs.
 func TestCompileStaysWithinTokenBudget(t *testing.T) {
-	comp, msgs := compilePkg(t, 200, 1<<20, "fix the Login function in @auth/login.go", []string{"auth/login.go"})
+	comp, msgs := compilePkg(t, 300, 1<<20, "fix the Login function in @auth/login.go", []string{"auth/login.go"})
 
 	if len(msgs) < 2 {
 		t.Fatalf("Compile produced %d messages, want >= 2 (broken/empty pipeline can't satisfy budget by being empty)", len(msgs))
@@ -134,8 +136,8 @@ func TestCompileStaysWithinTokenBudget(t *testing.T) {
 	for _, m := range msgs {
 		total += comp.counter.Count(m.Content)
 	}
-	if total > 200 {
-		t.Errorf("compiled prompt token total = %d, want <= window 200 (applyBudget must trim over-budget)", total)
+	if total > 300 {
+		t.Errorf("compiled prompt token total = %d, want <= window 300 (applyBudget must trim over-budget)", total)
 	}
 }
 
@@ -278,6 +280,40 @@ func TestCompileEmitsPreferencesGroup(t *testing.T) {
 	}
 }
 
+// TestCompileEmitsRAGGroup: the RAG group (retrieved code chunks, File 11
+// §11.6) renders under a stable <rag> tag, after <files> and before the
+// conversation. This is RED until order() emits the group.
+func TestCompileEmitsRAGGroup(t *testing.T) {
+	pkg := context.ContextPackage{
+		System: []context.Part{{Kind: context.KindSystem, Source: "<system>", Text: "role"}},
+		Files: []context.Part{
+			{Kind: context.KindFile, Source: "main.go", Text: "package main"},
+		},
+		RAG: []context.Part{
+			{Kind: context.KindRAG, Source: "auth/login.go", Text: "func Login(user string) error"},
+		},
+		User:   []context.Part{{Kind: context.KindSystem, Source: "goal", Text: "fix login"}},
+		Budget: allocateBudget(50_000),
+	}
+	comp := New(nil, nil)
+	msgs := comp.CompilePackage(&pkg)
+
+	joined := ""
+	for _, m := range msgs {
+		joined += m.Content
+	}
+	if !contains(joined, "func Login") {
+		t.Error("compiled prompt dropped the RAG group; a retrieved chunk did not surface")
+	}
+	if !contains(joined, "<rag>") || !contains(joined, "</rag>") {
+		t.Error("compiled prompt missing <rag>…</rag> section tag; the RAG group must render under its stable tag")
+	}
+	// The <rag> tag must come after <files> (retrieved context order).
+	if fi, ri := indexOf(joined, "<files>"), indexOf(joined, "<rag>"); fi >= 0 && ri >= 0 && ri < fi {
+		t.Error("<rag> rendered before <files>; want after (retrieved-context order)")
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
@@ -285,6 +321,16 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// indexOf returns the first index of sub in s, or -1.
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // allocateBudget mirrors internal/context.allocate so this package's tests can
@@ -307,14 +353,15 @@ func allocateBudget(window int) context.Budget {
 		proj = 2048
 	}
 	conv := avail * 45 / 100
-	files := avail * 25 / 100
-	user := avail - sys - proj - conv - files
+	files := avail * 17 / 100
+	rag := avail * 8 / 100
+	user := avail - sys - proj - conv - files - rag
 	if user < 0 {
 		user = 0
 	}
 	return context.Budget{
 		Window: window, Reserve: reserve,
-		System: sys, Project: proj, Conversation: conv, Files: files, User: user,
+		System: sys, Project: proj, Conversation: conv, Files: files, RAG: rag, User: user,
 	}
 }
 

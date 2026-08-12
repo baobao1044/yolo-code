@@ -185,6 +185,34 @@ func TestBuildHasSystemAndPreferencesGroups(t *testing.T) {
 	_ = pkg.Preferences // present as a field (struct, not nilable); just touch it
 }
 
+// TestSystemPromptContainsDirectAnswerRules pins the Phase 1 fix: the system
+// prompt instructs the model to answer directly (not self-introduce) and lists
+// grep. Without these, the model greets instead of answering non-coding
+// questions.
+func TestSystemPromptContainsDirectAnswerRules(t *testing.T) {
+	repo := fixtureRepo(t)
+	eng := newEngine(t, repo, nil)
+	req, _ := newReq(repo, "goal")
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(pkg.System) == 0 {
+		t.Fatal("pkg.System empty")
+	}
+	text := pkg.System[0].Text
+	for _, want := range []string{
+		"Answer the user's actual question",
+		"Do NOT introduce yourself",
+		"Be concise",
+		"grep",
+	} {
+		if !contains(text, want) {
+			t.Errorf("system prompt missing %q (the model would self-introduce instead of answering)", want)
+		}
+	}
+}
+
 // contains is a tiny strings.Contains helper kept local to avoid an import
 // just for one assertion.
 func contains(s, sub string) bool {
@@ -198,4 +226,62 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// fakeMemory is a test Memory seam returning canned Preferences + RAG Parts.
+// It implements the full Memory interface (Preferences/Project/Retrieve) so
+// the gather RAG path is testable without wiring a real vector store.
+type fakeMemory struct {
+	prefs []Part
+	rag   []Part
+}
+
+func (f fakeMemory) Preferences(stdctx.Context, string) []Part { return f.prefs }
+func (f fakeMemory) Project(stdctx.Context, string) []Part     { return nil }
+func (f fakeMemory) Retrieve(stdctx.Context, string, int) []Part {
+	return f.rag
+}
+
+// TestBuildGathersRAGFromMemoryRetrieve: when the Memory seam returns RAG
+// Parts, Build's gather feeds them into pkg.RAG (File 11 §11.6.2 → §6.1).
+func TestBuildGathersRAGFromMemoryRetrieve(t *testing.T) {
+	repo := fixtureRepo(t)
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	rag := []Part{{Kind: KindRAG, Source: "auth/login.go", Text: "func Login(user string) error"}}
+	eng := New(Deps{
+		Bus:    bus,
+		Repo:   repo,
+		Memory: fakeMemory{rag: rag},
+		Open:   nil,
+	})
+	req, _ := newReq(repo, "fix the Login function")
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(pkg.RAG) == 0 {
+		t.Fatal("pkg.RAG empty; Build must gather the Memory seam's retrieved chunks")
+	}
+	if pkg.RAG[0].Source != "auth/login.go" {
+		t.Errorf("pkg.RAG[0].Source = %q, want auth/login.go", pkg.RAG[0].Source)
+	}
+	if !contains(pkg.RAG[0].Text, "func Login") {
+		t.Errorf("pkg.RAG[0].Text = %q, want the Login body", pkg.RAG[0].Text)
+	}
+}
+
+// TestBuildRAGEmptyWhenMemoryReturnsNone: a noop memory seam leaves pkg.RAG
+// empty (the default path before L10-006 wires a real store).
+func TestBuildRAGEmptyWhenMemoryReturnsNone(t *testing.T) {
+	repo := fixtureRepo(t)
+	eng := newEngine(t, repo, nil) // noopMemory
+	req, _ := newReq(repo, "do something")
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(pkg.RAG) != 0 {
+		t.Errorf("pkg.RAG = %d parts, want 0 (noop memory)", len(pkg.RAG))
+	}
 }

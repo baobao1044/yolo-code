@@ -109,13 +109,20 @@ func (e *Engine) gather(ctx stdctx.Context, req ContextRequest) []Part {
 	// 1. System: role + tool schemas. Always present.
 	parts = append(parts, Part{
 		Kind: KindSystem, Source: "<system>",
-		Text: `You are yolo, a terminal coding agent. You operate on a local git repository using tools.
+		Text: `You are yolo, an AI assistant in the terminal. Answer the user's question directly and concisely.
+
+RULES:
+- Answer the user's actual question. Do NOT introduce yourself, greet, or ask what they want.
+- For coding tasks: use tools (read_file, edit_file, bash, grep) to operate on the local repo.
+- For general questions (non-coding): answer directly using your knowledge, or use bash to run commands (e.g. curl for web queries).
+- Be concise. No filler. No "Sure, I'll help with that." Just answer.
 
 AVAILABLE TOOLS:
 - list_files: list files in the repo. Args: {}
 - read_file: read a file's contents. Args: {"file": "<path>"}
 - edit_file: edit a file. Args: {"file": "<path>", "content": "<full new file content>"}
 - bash: run a shell command. Args: {"command": "<cmd>"}
+- grep: search file contents. Args: {"pattern": "<regex>", "path": "<dir or file>"}
 
 TOOL CALL FORMAT:
 To call a tool, emit a fenced code block with the "tool" language tag:
@@ -128,8 +135,8 @@ You may include prose before/after tool blocks. A single response can contain
 multiple tool blocks. If no tool blocks are present, the response is treated as
 a direct answer and the task ends.
 
-STRATEGY:
-1. Read relevant files first (read_file) to understand the codebase.
+CODING STRATEGY:
+1. Read relevant files first (read_file or grep) to understand the codebase.
 2. Plan your changes.
 3. Apply edits (edit_file).
 4. Verify with bash (go build, go test, etc.).
@@ -155,6 +162,13 @@ Always output the FULL file content when using edit_file — never partial diffs
 
 	// 8. Preferences (stub) — slotted into its own group.
 	parts = append(parts, e.memory.Preferences(ctx, string(req.Task.ID))...)
+
+	// 9. RAG: semantic retrieval over the vector store (File 11 §11.6). The
+	// memory seam runs a cosine search against embedded code chunks and returns
+	// the top-k as Parts carrying path/name/kind in Attr. The noop stub returns
+	// none; L10-006 wires the real memory.Store so cold-start indexing feeds
+	// hits here. The query is the task goal (§11.6.2 retrieval flow).
+	parts = append(parts, e.memory.Retrieve(ctx, req.Task.Goal, 10)...)
 
 	// Mark explicit @-references in the goal against gathered file sources.
 	markExplicit(parts, req.Task.Goal)

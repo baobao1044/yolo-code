@@ -333,3 +333,130 @@ func TestTruncateJSON(t *testing.T) {
 		t.Errorf("truncateJSON nil = %q, want empty", got)
 	}
 }
+
+// --- Phase C: onboarding, help sections, statusDot text fallback ---
+
+// TestViewEmptyStateOnboarding pins Phase C: before the first task (no
+// messages, no taskID), the chat pane renders a welcome panel naming the
+// agent, listing example prompts, and pointing to ? for help.
+func TestViewEmptyStateOnboarding(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	// No messages, no task → empty-state.
+
+	out := m.View()
+	if !strings.Contains(out, "AI assistant") {
+		t.Errorf("empty-state missing welcome banner; output:\n%s", out)
+	}
+	if !strings.Contains(out, "examples") {
+		t.Errorf("empty-state missing 'examples' section; output:\n%s", out)
+	}
+	if !strings.Contains(out, "press ? for key bindings") {
+		t.Errorf("empty-state missing help hint; output:\n%s", out)
+	}
+	// An example prompt should be visible.
+	if !strings.Contains(out, "fibonacci") {
+		t.Errorf("empty-state missing an example prompt; output:\n%s", out)
+	}
+}
+
+// TestViewEmptyStateSuppressedAfterTask pins Phase C: once a task starts
+// (taskID set), the empty-state panel is NOT shown — the chat pane shows
+// "no messages" instead.
+func TestViewEmptyStateSuppressedAfterTask(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	m.taskID = "t-1"
+
+	out := m.View()
+	if strings.Contains(out, "AI assistant") {
+		t.Errorf("empty-state shown after task start; output:\n%s", out)
+	}
+}
+
+// TestViewHelpOverlaySections pins Phase C: the help overlay is grouped into
+// three labeled sections — Navigation, Task control, Approval — so a user
+// can scan to the right group.
+func TestViewHelpOverlaySections(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	m.showHelp = true
+
+	out := m.View()
+	for _, want := range []string{"Navigation", "Task control", "Approval"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("help overlay missing section %q; output:\n%s", want, out)
+		}
+	}
+	// The non-trapping note should appear under Approval.
+	if !strings.Contains(out, "scroll, help, esc and quit still work") {
+		t.Errorf("help overlay missing non-trapping note; output:\n%s", out)
+	}
+}
+
+// TestStatusDotTextFallback pins Phase C accessibility: statusDot returns a
+// text tag (not just a color-only glyph) so the status is readable in mono /
+// NO_COLOR mode and distinguishable without color.
+func TestStatusDotTextFallback(t *testing.T) {
+	cases := map[string]string{
+		"assigned":    "[~]",
+		"coded":        "[~]",
+		"approved":     "[+]",
+		"tested:pass":  "[+]",
+		"rework":       "[!]",
+		"tested:fail":  "[!]",
+		"unknown":      "[ ]",
+	}
+	for status, want := range cases {
+		got := statusDot(status)
+		if got != want {
+			t.Errorf("statusDot(%q) = %q, want %q", status, got, want)
+		}
+	}
+}
+
+// TestStatusViewCollapsesOnNarrowWidth pins Phase 4: on a narrow terminal the
+// status line drops low-priority hints (scroll, "type goal + Enter") and keeps
+// high-priority ones (focus tags, quit/help) so the line fits.
+func TestStatusViewCollapsesOnNarrowWidth(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 40 // narrow
+	m.height = 24
+
+	out := statusView(m)
+	// Focus tag [chat] is priority 0 → always present.
+	if !strings.Contains(out, "[chat]") {
+		t.Errorf("narrow status line missing [chat] focus tag (P0): %q", out)
+	}
+	// "type goal + Enter" is priority 6 → should be dropped on width 40.
+	if strings.Contains(out, "type goal + Enter") {
+		t.Errorf("narrow status line kept P6 hint 'type goal + Enter' (should collapse): %q", out)
+	}
+}
+
+// TestStatusViewFullOnWideTerminal pins Phase 4: on a wide terminal all hints
+// appear — nothing is collapsed.
+func TestStatusViewFullOnWideTerminal(t *testing.T) {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+
+	out := statusView(m)
+	if !strings.Contains(out, "[chat]") {
+		t.Errorf("wide status line missing [chat]: %q", out)
+	}
+	if !strings.Contains(out, "q quit") {
+		t.Errorf("wide status line missing quit hint: %q", out)
+	}
+	if !strings.Contains(out, "type goal + Enter") {
+		t.Errorf("wide status line missing 'type goal + Enter' (should fit): %q", out)
+	}
+}
