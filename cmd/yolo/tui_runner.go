@@ -6,9 +6,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 
+	cog "github.com/baobao1044/yolo-code/internal/cognitive"
 	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
 	"github.com/baobao1044/yolo-code/internal/event"
 	"github.com/baobao1044/yolo-code/internal/runtime"
@@ -72,6 +75,7 @@ func runTUI(ctx context.Context) error {
 		bus:    bus,
 		smgr:   smgr,
 		core:   core,
+		cog:    deps.cogCore,
 		sid:    sid,
 		repo:   repo,
 	}
@@ -96,6 +100,7 @@ type tuiDriver struct {
 	bus    *event.Bus
 	smgr   *session.Manager
 	core   *runtime.Core
+	cog    *cog.Core // for slash-command provider swap (SetProvider)
 	sid    session.ID
 	repo   string
 	busy   atomic.Bool
@@ -146,9 +151,144 @@ func (d *tuiDriver) handle(env event.Envelope) {
 				_, _ = d.core.Submit(d.ctx, d.sid, text)
 			}
 		}(e.Text)
+	case *event.UserCommandEvent:
+		// Slash command that needs the runtime (model/provider/status).
+		// Guard: never swap provider mid-task — Think reads it in the drive
+		// goroutine. If busy, tell the user to finish/cancel first.
+		if d.busy.Load() {
+			d.respond("task running — finish or cancel before switching model/provider")
+			return
+		}
+		d.handleCommand(e.Command, e.Args)
 	case *event.UserQuitEvent:
 		d.cancel()
 	}
+}
+
+// handleCommand performs the runtime action for a slash command and publishes
+// a CommandResponseEvent with the outcome text.
+func (d *tuiDriver) handleCommand(cmd, args string) {
+	switch cmd {
+	case "model":
+		d.cmdModel(args)
+	case "provider":
+		d.cmdProvider(args)
+	case "status":
+		d.cmdStatus()
+	default:
+		d.respond("unknown command: " + cmd)
+	}
+}
+
+// cmdModel swaps the model name, rebuilds the provider from env, and swaps it
+// into the cognitive Core. /model <name> sets YOLO_MODEL then rebuilds (base-url
+// + api-key stay; only the model changes).
+func (d *tuiDriver) cmdModel(name string) {
+	if name == "" {
+		d.respond("usage: /model <name>")
+		return
+	}
+	_ = os.Setenv("YOLO_MODEL", name)
+	if d.cog == nil {
+		d.respond("model: " + name + " (no runtime to swap)")
+		return
+	}
+	d.cog.SetProvider(cog.ResolveProvider())
+	d.respond("model: " + name)
+}
+
+// cmdProvider swaps the LLM provider preset. /provider <name> looks up the
+// preset, sets the env vars (YOLO_PROVIDER, YOLO_BASE_URL, YOLO_MODEL), builds
+// the provider from preset + key, and swaps it. /provider (no arg) lists all
+// presets so the user can pick.
+func (d *tuiDriver) cmdProvider(name string) {
+	if name == "" {
+		var sb strings.Builder
+		sb.WriteString("providers:")
+		for _, p := range cog.ListProviders() {
+			sb.WriteString("\n  ")
+			sb.WriteString(p.Name)
+			sb.WriteString(" — ")
+			sb.WriteString(p.Description)
+		}
+		d.respond(sb.String())
+		return
+	}
+	preset, ok := cog.LookupProvider(name)
+	if !ok {
+		d.respond("unknown provider: " + name + " (try /provider to list)")
+		return
+	}
+	// Set env so a later /model or restart stays consistent.
+	_ = os.Setenv("YOLO_PROVIDER", preset.Name)
+	_ = os.Setenv("YOLO_BASE_URL", preset.BaseURL)
+	if os.Getenv("YOLO_MODEL") == "" {
+		_ = os.Setenv("YOLO_MODEL", preset.DefaultModel)
+	}
+	if d.cog == nil {
+		d.respond("provider: " + preset.Name + " (no runtime to swap)")
+		return
+	}
+	key := resolveProviderKey(preset)
+	if preset.NeedsKey && key == "" {
+		d.respond("provider: " + preset.Name + " — needs API key (" + preset.KeyEnv + " or YOLO_API_KEY)")
+		return
+	}
+	d.cog.SetProvider(cog.ProviderFromPreset(preset, key))
+	d.respond(fmt.Sprintf("provider: %s (%s)", preset.Name, preset.DefaultModel))
+}
+
+// cmdStatus builds a status string: current model, provider, and accumulated
+// cost. Reads env (model) + YOLO_PROVIDER (provider name) — the runtime itself
+// doesn't expose a query for the active model, so env is the source of truth
+// (set by /model and /provider).
+func (d *tuiDriver) cmdStatus() {
+	model := os.Getenv("YOLO_MODEL")
+	if model == "" {
+		model = "gpt-4o"
+	}
+	provider := os.Getenv("YOLO_PROVIDER")
+	if provider == "" {
+		provider = "openai (default)"
+	}
+	d.respond(fmt.Sprintf("status: model=%s · provider=%s · theme=%s", model, provider, tuiCurrentThemeName()))
+}
+
+// respond publishes a CommandResponseEvent the TUI folds into the chat pane.
+func (d *tuiDriver) respond(text string) {
+	_ = d.bus.Publish(d.ctx, &event.CommandResponseEvent{Text: text})
+}
+
+// resolveProviderKey resolves the API key for a preset: KeyEnv first, then
+// YOLO_API_KEY, then OPENAI_API_KEY. Local providers (NeedsKey=false) get "".
+func resolveProviderKey(p cog.ProviderPreset) string {
+	if !p.NeedsKey {
+		return ""
+	}
+	if p.KeyEnv != "" {
+		if k := os.Getenv(p.KeyEnv); k != "" {
+			return k
+		}
+	}
+	if k := os.Getenv("YOLO_API_KEY"); k != "" {
+		return k
+	}
+	if k := os.Getenv("OPENAI_API_KEY"); k != "" {
+		return k
+	}
+	return ""
+}
+
+// tuiCurrentThemeName reads YOLO_THEME from the environment. Mirrors the TUI's
+// currentThemeName() — the driver lives in cmd/yolo and can't import the TUI
+// for a trivial env read (import matrix), so it reads env directly.
+func tuiCurrentThemeName() string {
+	t := strings.ToLower(strings.TrimSpace(os.Getenv("YOLO_THEME")))
+	switch t {
+	case "dark", "light", "contrast", "mono":
+		return t
+	}
+	return "dark"
 }
 
 func (d *tuiDriver) runOrchestrator(goal string) {

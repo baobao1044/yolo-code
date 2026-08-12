@@ -185,6 +185,17 @@ func (a contextMemoryAdapter) Project(ctx context.Context, projectID string) []e
 	return toContextParts(a.store.Project().Project(ctx))
 }
 
+// Retrieve runs a semantic query against the memory's vector store (File 11
+// §11.6.2) and returns the top-k code chunks as context.Parts. The query is the
+// task goal; the Context Engine's gather feeds the hits into the prompt's RAG
+// group. A nil store returns none (the noop path).
+func (a contextMemoryAdapter) Retrieve(ctx context.Context, query string, topK int) []econtext.Part {
+	if a.store == nil || query == "" || topK <= 0 {
+		return nil
+	}
+	return toContextParts(a.store.Semantic().Retrieve(ctx, query, topK))
+}
+
 // toContextParts translates memory.Part → context.Part field-for-field. The
 // kinds align (memory.KindPreferences → context.KindPreferences, etc.); the
 // adapter maps the kind string so the ranker/compress group them correctly.

@@ -13,9 +13,55 @@ package memory
 
 // WorkingMemory holds the live conversation being mutated this turn. It forks
 // a Conversation view so a turn's tentative appends don't touch the parent
-// until the fork is committed.
+// until the fork is committed. It also carries the current task + state
+// (§11.3.1): task.created → SetTask, state.change → SetState, task.completed
+// → Clear (the listener drives these, §11.2). The Context Engine reads these
+// as the highest-priority context input.
 type WorkingMemory struct {
-	conv *Conversation
+	conv  *Conversation
+	task  string
+	state string
+}
+
+// SetTask records the current task (§11.3.1 — on task.created). Nil-safe.
+func (w *WorkingMemory) SetTask(t string) {
+	if w != nil {
+		w.task = t
+	}
+}
+
+// Task returns the current task (§11.3.1). Empty for a nil/empty working memory.
+func (w *WorkingMemory) Task() string {
+	if w == nil {
+		return ""
+	}
+	return w.task
+}
+
+// SetState records the current runtime state (§11.3.1 — on state.change).
+// Nil-safe.
+func (w *WorkingMemory) SetState(s string) {
+	if w != nil {
+		w.state = s
+	}
+}
+
+// State returns the current runtime state (§11.3.1).
+func (w *WorkingMemory) State() string {
+	if w == nil {
+		return ""
+	}
+	return w.state
+}
+
+// Clear resets the task + state + live conversation (§11.3.1 — on
+// task.completed). Nil-safe.
+func (w *WorkingMemory) Clear() {
+	if w != nil {
+		w.task = ""
+		w.state = ""
+		w.conv = nil
+	}
 }
 
 // Append adds a message to the working memory's live conversation. The runtime

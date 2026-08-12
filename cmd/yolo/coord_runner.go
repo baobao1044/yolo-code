@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/baobao1044/yolo-code/internal/cognitive"
 	econtext "github.com/baobao1044/yolo-code/internal/context"
 	coordpkg "github.com/baobao1044/yolo-code/internal/coord"
 	"github.com/baobao1044/yolo-code/internal/event"
 	"github.com/baobao1044/yolo-code/internal/exec"
+	"github.com/baobao1044/yolo-code/internal/memory"
 	"github.com/baobao1044/yolo-code/internal/prompt"
 	"github.com/baobao1044/yolo-code/internal/runtime"
 	"github.com/baobao1044/yolo-code/internal/session"
@@ -148,10 +150,32 @@ func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context, task event.Ta
 		cogProv = &patchToolProvider{path: path, body: body}
 	}
 
+	// L10-006: each per-todo Core gets its own memory Store so the Context
+	// Engine's RAG seam has a vector store to query. No Bus is wired (the coord
+	// runtime is short-lived and doesn't drive the listener-driven learning
+	// path); the store is cold-start indexed from r.repo (Phase C) so semantic
+	// retrieval returns real chunks. A temp dir backs persistence; it isn't
+	// cleaned up (the coord runner's session dir follows the same pattern, and
+	// Knowledge isn't shared across roles — a documented S12 limitation).
+	memDir, err := os.MkdirTemp("", "yolo-coord-mem-*")
+	if err != nil {
+		return runtime.Deps{}, err
+	}
+	memStore, err := memory.Open(memory.Deps{Root: memDir})
+	if err != nil {
+		return runtime.Deps{}, err
+	}
+	// Cold-start index r.repo so the coord runtime's RAG seam has real chunks
+	// (§11.7.5). Best-effort + bounded by a timeout (a huge repo shouldn't
+	// stall task assignment).
+	indexCtx, indexCancel := context.WithTimeout(ctx, 30*time.Second)
+	_, _ = memory.IndexRepo(indexCtx, memStore.Semantic(), r.repo)
+	indexCancel()
+
 	d := runtime.Deps{
 		Bus:       r.bus,
 		Session:   smgr,
-		Context:   contextAdapter{eng: econtext.New(econtext.Deps{Bus: r.bus, Repo: r.repo})},
+		Context:   contextAdapter{eng: econtext.New(econtext.Deps{Bus: r.bus, Repo: r.repo, Memory: contextMemoryAdapter{store: memStore}})},
 		Prompt:    promptAdapter{comp: prompt.New(nil, r.bus)},
 		Cognitive: newRealCognitiveCore(cogProv, r.bus),
 		Exec:      execAd,

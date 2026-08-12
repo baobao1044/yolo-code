@@ -182,11 +182,13 @@ func (e *Engine) Apply(ctx context.Context, op Op) (Result, error) {
 
 	// Success: summarize the diff and publish patch.applied (File 10 §10.6 +
 	// File 05 §5.4.4) so the transcript shows what changed. The summary is
-	// computed from original→next (a new file: original ""). Publish errors
+	// computed from original→next (a new file: original ""). The Diff string
+	// (Phase D) carries the rendered hunks for the TUI viewer. Publish errors
 	// don't fail the apply — the write already succeeded; a dropped event is
 	// survivable, a rolled-back success would corrupt the tree.
 	res.Accepted = true
 	res.Summary = Summarize([]Change{{Path: op.Path, Original: original, Next: next}})
+	diff := UnifiedDiff(original, next)
 	if e.bus != nil {
 		_ = e.bus.Publish(ctx, &event.PatchAppliedEvent{
 			Task:       event.TaskID(op.Task),
@@ -194,6 +196,7 @@ func (e *Engine) Apply(ctx context.Context, op Op) (Result, error) {
 			Files:      toEventFiles(res.Summary.Files),
 			Insertions: res.Summary.Insertions,
 			Deletions:  res.Summary.Deletions,
+			Diff:       diff,
 		})
 	}
 	return res, nil

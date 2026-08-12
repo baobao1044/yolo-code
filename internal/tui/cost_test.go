@@ -1,14 +1,15 @@
 // Tests for TUI-005 — Cost meter (File 14 §14.7.5). The cost-meter rail shows
-// the degradation level + an abort banner. Per Decision 2 + spec gap: the
-// catalog has only CostDegradedEvent + CostAbortEvent — NO CostSpendEvent/
-// CostLoopEvent — so dollars/loops stay blank (deferred to the integration
-// sprint; the events don't exist yet). The TUI never imports infra to read a
-// snapshot (import matrix: tui imports only event + bubbletea-libs + stdlib).
+// the degradation level + an abort banner. Phase D adds dollars + a rough
+// token estimate accumulated from real events (CostIncurredEvent.Dollars +
+// llm.token deltas). The TUI never imports infra to read a snapshot (import
+// matrix: tui imports only event + bubbletea-libs + stdlib).
 //
 //   cost.degraded → m.cost.level = e.Stage  (File 14 reads .level; the real
 //                  field is Stage — spec gap, field-name mismatch documented)
 //   cost.abort    → m.cost.aborted = true, m.cost.abortReason = e.Reason,
 //                  banner surfaces the abort
+//   cost.incurred → m.cost.dollars += e.Dollars (Phase D, real rate)
+//   llm.token     → m.cost.tokensEst += len(e.Delta)/4 (Phase D, rough est.)
 
 package tui
 
@@ -53,28 +54,47 @@ func TestFoldCostAbortSetsBanner(t *testing.T) {
 	}
 }
 
-// TestFoldCostMeterDollarsLoopsBlank pins Decision 2 / spec gap: the catalog
-// has no CostSpendEvent/CostLoopEvent, so the costView starts with no
-// dollars/loops. After a degraded + abort, the model carries only level +
-// aborted/reason — NOT fabricated dollar/loop figures. This guards against a
-// future change inventing figures the bus never sent (which would make the TUI
-// a second source of truth — exactly what §14.1 forbids).
-func TestFoldCostMeterDollarsLoopsBlank(t *testing.T) {
+// TestFoldCostMeterDollarsAccumulate pins Phase D: CostIncurredEvent.Dollars
+// accumulate into m.cost.dollars (real per-tool-call rate from the cost
+// publisher — NOT fabricated). Two events sum, so the rail shows total spend.
+func TestFoldCostMeterDollarsAccumulate(t *testing.T) {
+	m := newModelForTest()
+	m, _ = fold(m, env(&event.CostIncurredEvent{Task: "t_1", Dollars: 0.01}))
+	if m.cost.dollars != 0.01 {
+		t.Errorf("dollars = %v, want 0.01 after first cost.incurred", m.cost.dollars)
+	}
+	m, _ = fold(m, env(&event.CostIncurredEvent{Task: "t_1", Dollars: 0.02}))
+	if m.cost.dollars != 0.03 {
+		t.Errorf("dollars = %v, want 0.03 after two cost.incurred (0.01+0.02)", m.cost.dollars)
+	}
+}
+
+// TestFoldCostMeterTokensEstimate pins Phase D: llm.token deltas accumulate a
+// rough token estimate (len(delta)/4) into m.cost.tokensEst.
+func TestFoldCostMeterTokensEstimate(t *testing.T) {
+	m := newModelForTest()
+	// "hello world" = 11 chars → 11/4 = 2 (integer division).
+	m, _ = fold(m, env(&event.TokenEvent{Task: "t_1", Delta: "hello world"}))
+	if m.cost.tokensEst != 2 {
+		t.Errorf("tokensEst = %d, want 2 (11 chars / 4)", m.cost.tokensEst)
+	}
+	// Another 8-char delta → 8/4 = 2; total 4.
+	m, _ = fold(m, env(&event.TokenEvent{Task: "t_1", Delta: "12345678"}))
+	if m.cost.tokensEst != 4 {
+		t.Errorf("tokensEst = %d, want 4 (2+2)", m.cost.tokensEst)
+	}
+}
+
+// TestFoldCostMeterLevelStillSet pins that the degraded level is still set
+// alongside the new dollars/tokens accumulation (Phase D didn't break it).
+func TestFoldCostMeterLevelStillSet(t *testing.T) {
 	m := newModelForTest()
 	m, _ = fold(m, env(&event.CostDegradedEvent{Task: "t_1", Stage: "verify only"}))
-	m, _ = fold(m, env(&event.CostAbortEvent{Task: "t_1", Reason: "cap"}))
-
-	// The costView has level + aborted + reason set, but NO dollars/loops —
-	// those fields don't exist (spec gap). Assert the documented shape: the
-	// model renders only what the bus sent.
-	if m.cost.level == "" {
-		t.Error("level should be set from cost.degraded")
+	m, _ = fold(m, env(&event.CostIncurredEvent{Task: "t_1", Dollars: 0.05}))
+	if m.cost.level != "verify only" {
+		t.Errorf("level = %q, want 'verify only'", m.cost.level)
 	}
-	if !m.cost.aborted {
-		t.Error("aborted should be set from cost.abort")
+	if m.cost.dollars != 0.05 {
+		t.Errorf("dollars = %v, want 0.05", m.cost.dollars)
 	}
-	// dollars/loops are not fields of costView — the struct intentionally
-	// omits them (spec gap). This test pins that: if a future change adds them,
-	// it must wire them from real events, not fabricate. Verified by the
-	// compiler: there's no m.cost.dollars or m.cost.loops to read.
 }

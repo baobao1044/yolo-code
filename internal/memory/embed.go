@@ -29,10 +29,12 @@ type hashEmbedder struct {
 }
 
 // NewHashEmbedder returns a deterministic hash-based embedder over a fixed
-// `dim`-dimensional space. dim must be > 0.
+// `dim`-dimensional space. dim must be > 0. The spec's §11.6.2 range is 384–768;
+// the project default (memory.Open when no Embedder is injected) is 384 — the
+// air-gapped MVP floor.
 func NewHashEmbedder(dim int) Embedder {
 	if dim <= 0 {
-		dim = 256
+		dim = 384
 	}
 	return &hashEmbedder{dim: dim}
 }

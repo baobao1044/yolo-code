@@ -54,3 +54,20 @@ func TestFoldTaskStartedDoesNotTouchRuntime(t *testing.T) {
 	m := newModelForTest()
 	_, _ = fold(m, env(&event.TaskStartedEvent{Task: "t_1", Goal: "g"}))
 }
+
+// TestFoldCommandResponseAppendsMessage pins Phase 4: a CommandResponseEvent
+// (driver → TUI) folds into the chat pane as a system-role message so the
+// user sees the slash command's outcome (e.g. "model: gpt-4o").
+func TestFoldCommandResponseAppendsMessage(t *testing.T) {
+	m := newModelForTest()
+	m, _ = fold(m, env(&event.CommandResponseEvent{Text: "model: gpt-4o"}))
+	if len(m.messages) != 1 {
+		t.Fatalf("messages = %d, want 1 (CommandResponseEvent appended)", len(m.messages))
+	}
+	if m.messages[0].role != "system" {
+		t.Errorf("role = %q, want system", m.messages[0].role)
+	}
+	if m.messages[0].text != "model: gpt-4o" {
+		t.Errorf("text = %q, want 'model: gpt-4o'", m.messages[0].text)
+	}
+}

@@ -18,15 +18,23 @@ type Scored struct {
 }
 
 // rank scores each part with the §6.2.2 blend and returns them in descending
-// score order.
+// score order. RAG parts (retrieved code chunks, File 11 §11.6) carry their
+// cosine similarity in Score from the SemanticStore; the blend's recency/
+// proximity/centrality signals don't apply to semantic chunks, so a RAG part
+// keeps its cosine score plus the explicit bonus rather than being re-blended.
 func (e *Engine) rank(parts []Part, req ContextRequest) []Part {
 	out := make([]Scored, len(parts))
 	for i, p := range parts {
-		s := 0.30*recency(p, time.Now()) +
-			0.25*proximity(p, req) +
-			0.20*semantic(p, req) +
-			0.15*centrality(p) +
-			0.10*explicit(p)
+		var s float64
+		if p.Kind == KindRAG {
+			s = p.Score + 0.10*explicit(p)
+		} else {
+			s = 0.30*recency(p, time.Now()) +
+				0.25*proximity(p, req) +
+				0.20*semantic(p, req) +
+				0.15*centrality(p) +
+				0.10*explicit(p)
+		}
 		out[i] = Scored{Part: p, Score: s}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })

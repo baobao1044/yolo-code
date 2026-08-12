@@ -57,7 +57,6 @@ func TestHeuristicPlannerSingleClause(t *testing.T) {
 func TestHeuristicPlannerDrivesOrchestrator(t *testing.T) {
 	bus := event.New()
 	rec := newRecordingSub(bus)
-	defer rec.close()
 
 	runner := &fakeAgentRunner{
 		bus:       bus,
@@ -73,7 +72,11 @@ func TestHeuristicPlannerDrivesOrchestrator(t *testing.T) {
 		t.Fatalf("orchestrator Run: %v", err)
 	}
 	_ = bus.Close()
-	time.Sleep(10 * time.Millisecond)
+	// Close the recording subscriber BEFORE reading its fields so the drain
+	// goroutine has finished (establishing a happens-before relationship). The
+	// bus close ends the drain's range; close waits on done. Reading before this
+	// would race the drain's appends (caught by -race).
+	rec.close()
 
 	if len(rec.types) == 0 || rec.types[0] != "coord.plan.ready" {
 		t.Fatalf("first event = %v, want coord.plan.ready", rec.types)

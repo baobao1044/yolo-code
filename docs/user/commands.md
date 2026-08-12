@@ -17,12 +17,26 @@
 |---|---|
 | `YOLO_API_KEY` | API key for the LLM provider (canonical) |
 | `OPENAI_API_KEY` | Fallback API key, used only if `YOLO_API_KEY` is unset |
-| `YOLO_BASE_URL` | Base URL of the OpenAI-compatible API |
+| `YOLO_PROVIDER` | Provider preset name (openai, groq, ollama, etc.) — see `/provider` in TUI |
+| `YOLO_BASE_URL` | API base URL (default `https://api.openai.com/v1`) |
 | `YOLO_MODEL` | Model name (default `gpt-4o`) |
 | `YOLO_LOG` | Structured log file path |
 | `YOLO_AUTO_APPROVE_MEDIUM` | `"true"` = auto-approve medium-risk tools |
 | `YOLO_AUTO_APPROVE_HIGH` | `"true"` = auto-approve high-risk tools |
 | `YOLO_REPO_ROOT` | Repo root (default = cwd) |
+
+## Slash commands (TUI)
+
+| Command | Action |
+|---|---|
+| `/help` | Toggle help overlay |
+| `/clear` | Wipe chat + reset scroll |
+| `/theme` | List themes + current |
+| `/theme <name>` | Switch palette (dark/light/contrast/mono) |
+| `/model <name>` | Swap model (rebuilds provider) |
+| `/provider` | List all 28 provider presets |
+| `/provider <name>` | Switch provider preset |
+| `/status` | Show model, provider, theme |
 
 ## Exit codes
 

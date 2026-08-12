@@ -21,11 +21,19 @@ type ExecHistoryStore struct {
 	root  string
 	mu    sync.Mutex
 	tasks map[string][]ExecEntry
+	// seqCounter tracks the monotonic per-task seq independent of the slice
+	// length, so the rolling window cap (below) doesn't reset it.
+	seqCounter map[string]int
 }
+
+// execWindow is the rolling-window cap (§11.4.1: "last 50 results"). Once a
+// task exceeds it, the oldest entries are dropped so the audit trail stays
+// bounded and the Context Engine's exec-memory input doesn't grow unbounded.
+const execWindow = 50
 
 // NewExecHistoryStore returns a JSON-file exec-history store rooted at dir.
 func NewExecHistoryStore(dir string) *ExecHistoryStore {
-	return &ExecHistoryStore{root: dir, tasks: make(map[string][]ExecEntry)}
+	return &ExecHistoryStore{root: dir, tasks: make(map[string][]ExecEntry), seqCounter: make(map[string]int)}
 }
 
 func (s *ExecHistoryStore) path(tid string) string {
@@ -33,12 +41,19 @@ func (s *ExecHistoryStore) path(tid string) string {
 }
 
 // Append records an entry for the task, assigning the next seq (append order).
-// The listener calls this reacting to tool.result (L10-002).
+// The listener calls this reacting to tool.result (L10-002). The slice is
+// capped at execWindow entries (§11.4.1 rolling window); the oldest entries
+// are dropped once the cap is exceeded. Seq is monotonic per task (tracked in
+// seqCounter, NOT the slice length) so the rolling window doesn't reset it.
 func (s *ExecHistoryStore) Append(_ context.Context, tid string, e ExecEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e.Seq = len(s.tasks[tid]) + 1
+	s.seqCounter[tid]++
+	e.Seq = s.seqCounter[tid]
 	s.tasks[tid] = append(s.tasks[tid], e)
+	if len(s.tasks[tid]) > execWindow {
+		s.tasks[tid] = s.tasks[tid][len(s.tasks[tid])-execWindow:]
+	}
 }
 
 // Persist writes the task's entries to its JSON file.
@@ -48,7 +63,9 @@ func (s *ExecHistoryStore) Persist(_ context.Context, tid string) error {
 	return writeJSON(s.path(tid), s.tasks[tid])
 }
 
-// Load re-reads the task's entries into the warm cache.
+// Load re-reads the task's entries into the warm cache. seqCounter is rebuilt
+// from the highest loaded Seq so subsequent Appends continue monotonically
+// (not from 1, which would collide with the loaded entries).
 func (s *ExecHistoryStore) Load(_ context.Context, tid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,6 +74,13 @@ func (s *ExecHistoryStore) Load(_ context.Context, tid string) error {
 		return err
 	}
 	s.tasks[tid] = entries
+	maxSeq := 0
+	for _, e := range entries {
+		if e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
+	s.seqCounter[tid] = maxSeq
 	return nil
 }
 

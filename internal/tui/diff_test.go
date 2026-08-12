@@ -1,10 +1,10 @@
 // Tests for TUI-004 — Diff viewer (File 14 §14.7.3). The diff viewer opens on
-// patch.applied or verification.failed and shows the changed files + counts
-// (hunk-colored). PatchAppliedEvent has NO diff-hunks text (spec gap: only
-// Snapshot + Files []PatchFile + Insertions/Deletions), so the viewer renders
-// the file list + counts, not hunks. VerificationFailedEvent carries a Reason
-// the viewer displays. The viewer is display-only — it never edits; edits come
-// only from patch.applied events (File 14 §14.1.1).
+// patch.applied or verification.failed and shows the changed files + counts.
+// Phase D: PatchAppliedEvent now carries a rendered unified-diff string (Diff
+// field) so the viewer shows real hunks, not just the file list + counts.
+// VerificationFailedEvent carries a Reason the viewer displays. The viewer is
+// display-only — it never edits; edits come only from patch.applied events
+// (File 14 §14.1.1).
 
 package tui
 
@@ -89,5 +89,42 @@ func TestFoldPatchAppliedReplacesPreviousDiff(t *testing.T) {
 	}
 	if m.diff.files[0].Path != "new.go" {
 		t.Errorf("diff files[0].Path = %q, want %q (second patch replaces the first)", m.diff.files[0].Path, "new.go")
+	}
+}
+
+// TestFoldPatchAppliedCarriesDiffString pins Phase D: a patch.applied event's
+// Diff field (the rendered unified-diff hunks) lands on m.diff.diff so the
+// viewer can show real hunks, not just the file list + counts.
+func TestFoldPatchAppliedCarriesDiffString(t *testing.T) {
+	m := newModelForTest()
+	m, _ = fold(m, env(&event.PatchAppliedEvent{
+		Task:  "t_1",
+		Files: []event.PatchFile{{Path: "main.go", Insertions: 2, Deletions: 1}},
+		Diff:  " package main\n-func old() {}\n+func new() {}",
+	}))
+
+	if m.diff == nil {
+		t.Fatal("m.diff = nil, want a diffView")
+	}
+	if m.diff.diff != " package main\n-func old() {}\n+func new() {}" {
+		t.Errorf("diff.diff = %q, want the event's Diff string", m.diff.diff)
+	}
+}
+
+// TestFoldPatchAppliedEmptyDiffDefaults pins Phase D: a patch.applied event
+// with no Diff field (e.g. a stub or headless producer) leaves m.diff.diff
+// empty, so the viewer falls back to the file list + counts.
+func TestFoldPatchAppliedEmptyDiffDefaults(t *testing.T) {
+	m := newModelForTest()
+	m, _ = fold(m, env(&event.PatchAppliedEvent{
+		Task:  "t_1",
+		Files: []event.PatchFile{{Path: "main.go", Insertions: 2, Deletions: 1}},
+	}))
+
+	if m.diff == nil {
+		t.Fatal("m.diff = nil")
+	}
+	if m.diff.diff != "" {
+		t.Errorf("diff.diff = %q, want \"\" (event had no Diff field)", m.diff.diff)
 	}
 }

@@ -72,5 +72,7 @@ func assign(pkg *ContextPackage, p Part) {
 		pkg.Diagnostics = append(pkg.Diagnostics, p)
 	case KindPreferences:
 		pkg.Preferences = append(pkg.Preferences, p)
+	case KindRAG:
+		pkg.RAG = append(pkg.RAG, p)
 	}
 }

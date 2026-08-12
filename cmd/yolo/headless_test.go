@@ -11,6 +11,11 @@ import (
 // (and S5 for the spine): `echo "hi" | yolo --headless` prints one line per
 // event, and two runs produce byte-identical output (modulo the timestamp,
 // which the headless projection omits by design).
+//
+// L10-006 wires the memory listener, which publishes memory.update events.
+// Those are excluded from the headless transcript projection (see headless.go:
+// the listener goroutine's interleaving is non-deterministic); the transcript
+// pins the agent's decision spine only.
 func TestHeadlessSingleTurnPrintsDeterministicTranscript(t *testing.T) {
 	first, err := runHeadless(bytes.NewBufferString("say hi\n"), 0)
 	if err != nil {
@@ -24,8 +29,7 @@ func TestHeadlessSingleTurnPrintsDeterministicTranscript(t *testing.T) {
 		t.Errorf("transcript not byte-identical across runs (S5)\n first:\n%s\n second:\n%s", first, second)
 	}
 
-	// With the Sprint 12 wired adapters, the spine includes the real context
-	// build + token stream before the direct answer.
+	// The spine events must appear in order.
 	want := []string{
 		"task.started",
 		"state.change",
@@ -45,6 +49,11 @@ func TestHeadlessSingleTurnPrintsDeterministicTranscript(t *testing.T) {
 		if !strings.Contains(lines[i], "\"type\":\""+w+"\"") {
 			t.Errorf("line %d = %q, want type %q", i, lines[i], w)
 		}
+	}
+	// memory.update must NOT appear (excluded from the projection as
+	// non-deterministic telemetry).
+	if strings.Contains(first, "memory.update") {
+		t.Error("transcript contains memory.update; it should be excluded from the headless projection (non-deterministic telemetry)")
 	}
 }
 

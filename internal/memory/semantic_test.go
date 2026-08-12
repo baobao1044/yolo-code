@@ -121,6 +121,100 @@ func TestSemanticRetrieveEmptyStoreReturnsNil(t *testing.T) {
 	}
 }
 
+// TestSemanticSizeReflectsInsertedChunks: Size() tracks addChunk/BulkInsert/
+// Delete (§11.6.2).
+func TestSemanticSizeReflectsInsertedChunks(t *testing.T) {
+	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	if got := s.Size(); got != 0 {
+		t.Errorf("Size on empty = %d, want 0", got)
+	}
+	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha"})
+	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta"})
+	if got := s.Size(); got != 2 {
+		t.Errorf("Size after 2 addChunk = %d, want 2", got)
+	}
+}
+
+// TestSemanticDeleteRemovesChunk: Delete(id) drops one chunk by id (§11.6.2);
+// a nonexistent id is a no-op.
+func TestSemanticDeleteRemovesChunk(t *testing.T) {
+	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha one"})
+	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta two"})
+	before := s.Size()
+	// Snapshot ids: the last appended chunk has the highest id.
+	s.mu.RLock()
+	lastID := s.chunks[len(s.chunks)-1].id
+	s.mu.RUnlock()
+	s.Delete(lastID)
+	if got := s.Size(); got != before-1 {
+		t.Errorf("Size after Delete = %d, want %d", got, before-1)
+	}
+	// Deleting a nonexistent id doesn't shrink further.
+	s.Delete(999999)
+	if got := s.Size(); got != before-1 {
+		t.Errorf("Size after bogus Delete = %d, want %d (no-op)", got, before-1)
+	}
+}
+
+// TestSemanticEvictDropsLeastRecentlyUsed: Evict(capacity) keeps the most-
+// recently-accessed chunks and drops the LRU ones (§11.6.3). Never-accessed
+// chunks (zero lastAccess) are evicted first.
+func TestSemanticEvictDropsLeastRecentlyUsed(t *testing.T) {
+	emb := NewHashEmbedder(256)
+	s := NewSemanticStoreWith(emb)
+	// Three chunks; "alpha" shares a term with a retrieval so its lastAccess
+	// gets bumped; the other two stay never-accessed.
+	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha shared"})
+	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta disjoint"})
+	s.addChunk(context.Background(), chunkVec{path: "c.go", text: "gamma disjoint"})
+	_ = s.Retrieve(context.Background(), "alpha", 5) // bumps a.go's lastAccess
+	s.Evict(1)
+	if s.Size() != 1 {
+		t.Fatalf("Size after Evict(1) = %d, want 1", s.Size())
+	}
+	parts := s.Retrieve(context.Background(), "alpha", 5)
+	if len(parts) == 0 || parts[0].Source != "a.go" {
+		t.Errorf("after Evict(1) the survivor = %v, want a.go (just accessed)", parts)
+	}
+}
+
+// TestSemanticEvictBelowCapacityIsNoop: Evict with a capacity already
+// satisfied doesn't drop anything.
+func TestSemanticEvictBelowCapacityIsNoop(t *testing.T) {
+	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha"})
+	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta"})
+	s.Evict(5)
+	if got := s.Size(); got != 2 {
+		t.Errorf("Size after Evict(5) = %d, want 2 (no-op)", got)
+	}
+}
+
+// TestSemanticThresholdFiltersLowSimilarity: SetThreshold(θ) drops chunks
+// whose cosine is below θ (§11.6.2). With a high θ, a weak match is filtered.
+func TestSemanticThresholdFiltersLowSimilarity(t *testing.T) {
+	emb := NewHashEmbedder(256)
+	s := NewSemanticStoreWith(emb)
+	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha alpha alpha"})
+	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "completely different tokens"})
+
+	// Without a threshold, the strong "alpha" match returns.
+	noThresh := s.Retrieve(context.Background(), "alpha", 5)
+	if len(noThresh) == 0 {
+		t.Fatal("Retrieve without threshold returned nothing for a strong match")
+	}
+	// With a high threshold, only the strong match survives; the disjoint one
+	// is filtered (its sim is 0).
+	s.SetThreshold(0.5)
+	withThresh := s.Retrieve(context.Background(), "alpha", 5)
+	for _, p := range withThresh {
+		if p.Score < 0.5 {
+			t.Errorf("threshold let through a chunk with score %v < 0.5: %+v", p.Score, p)
+		}
+	}
+}
+
 // vecEq reports whether two float32 slices are element-wise equal.
 func vecEq(a, b []float32) bool {
 	if len(a) != len(b) {

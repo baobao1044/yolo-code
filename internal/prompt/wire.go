@@ -17,6 +17,7 @@
 //	<project>      AGENTS.md / project rules
 //	<preferences>  recalled user preferences (File 11 §11.8, L10-006)
 //	<files>        retrieved files, graph, diagnostics
+//	<rag>          semantically retrieved code chunks (File 11 §11.6, L10-006)
 //
 // (Conversation turns and the current user message are emitted bare, as their
 // own messages with role tags handled by the message envelope, not a section.)

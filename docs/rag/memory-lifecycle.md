@@ -2,6 +2,8 @@
 
 The Memory System (L10) manages 6 types of memory, updated **entirely via events** — never through direct writes.
 
+> **Implementation status (S13, 2026-08-12):** the full 6-type lifecycle is wired into the live agent path. The memory listener subscribes to 9 event topics (`task.started`/`task.completed`/`state.change`/`assistant.message`/`tool.result`/`patch.applied`/`verification.failed`/`verification.stage`/`user.preference`) and is the sole writer to the sub-stores. Knowledge insights persist cross-session. The Context Engine queries the SemanticStore + KnowledgeStore via the `Memory.Retrieve` seam. Cold-start `IndexRepo` indexes the repo at session open. See `internal/memory/listener.go`, `internal/memory/knowledge.go`, `internal/memory/index.go`.
+
 ## Golden Rule
 
 > **Memory is only updated via events. No code calls Memory.Write() directly.**

@@ -15,6 +15,7 @@
 - **2 modes**: Interactive TUI (beautiful terminal) + Headless (JSON events for CI/scripts)
 - **OpenAI-compatible**: Works with any provider that supports the OpenAI API (GPT-4, etc.)
 - **12-layer architecture**: Event Bus backbone, single-goroutine FSM, pure-Go vector store
+- **RAG & memory (S13)**: Cold-start repo indexing (per-function chunking), semantic retrieval wired into the prompt under a `<rag>` tag, 6 event-driven memory types with cross-session persistence, knowledge insight store fed by verify/task events, rolling-window exec history, LRU eviction
 
 ## Architecture
 
@@ -97,6 +98,10 @@ Type a task at the prompt. The TUI displays a multi-agent board, cost meter, dif
 | `YOLO_LOG` | — | Structured log file path |
 | `YOLO_AUTO_APPROVE_MEDIUM` | `false` | Auto-approve medium-risk tools |
 | `YOLO_AUTO_APPROVE_HIGH` | `false` | Auto-approve high-risk tools |
+| `YOLO_PROVIDER` | — | Provider preset name (openai, groq, ollama, etc.) — use `/provider` in TUI to list/switch |
+| `YOLO_THEME` | `dark` | TUI color theme: `dark`/`light`/`contrast`/`mono` |
+| `NO_COLOR` | — | Any non-empty value forces the mono theme (per [NO_COLOR](https://no-color.org/)) |
+| `YOLO_NO_MOTION` | — | Any non-empty value disables spinner + cursor blink (reduced motion) |
 
 See [docs/user/configuration.md](docs/user/configuration.md) for full details.
 

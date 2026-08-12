@@ -18,12 +18,21 @@ import (
 	"github.com/baobao1044/yolo-code/internal/event"
 )
 
-// listenTopics is the set the memory listener subscribes to (§11.2).
+// listenTopics is the set the memory listener subscribes to. §11.2 lists the
+// full event→memory mapping; L10-006 widens it beyond the L10-002 set to cover
+// the working/knowledge/exec lifecycle: task.started/state.change drive Working
+// memory; verification.* feed Knowledge insights; user.preference routes to
+// the Preference store; task.completed clears Working + persists exec/knowledge.
 var listenTopics = []event.Topic{
 	event.Topic("patch.applied"),
 	event.Topic("tool.result"),
+	event.Topic("task.started"),
 	event.Topic("task.completed"),
+	event.Topic("state.change"),
 	event.Topic("assistant.message"),
+	event.Topic("verification.failed"),
+	event.Topic("verification.stage"),
+	event.Topic("user.preference"),
 }
 
 // listen subscribes to the memory topics and runs the drain goroutine. Called
@@ -87,18 +96,71 @@ func (s *Store) dispatch(e event.Event) (store string, items int) {
 		for _, f := range ev.Files {
 			paths = append(paths, f.Path)
 		}
-		s.repo.Invalidate(paths)
-		for _, p := range paths {
-			s.knowledge.Reindex(ctx, p, nil) // L10-004 passes the new content
-		}
+		s.repo.Invalidate(paths) // fast (in-memory)
+		// Reindex reads via FS + embeds — offload so the drain stays fast and
+		// the listener channel doesn't fill (which would block the drive loop's
+		// fan-out holding fanoutMu, deadlocking publishUpdate). A nil FS makes
+		// Reindex a no-op, so this is safe to fire-and-forget. Tracked on bg so
+		// Close waits for it (no racing a temp-dir cleanup).
+		pathsCopy := append([]string(nil), paths...)
+		s.bg.Add(1)
+		go func() {
+			defer s.bg.Done()
+			for _, p := range pathsCopy {
+				s.knowledge.Reindex(context.Background(), p, nil) // §11.7.5
+			}
+		}()
 		return "repo", len(paths)
-	case *event.TaskCompletedEvent:
-		// Persist the conversation + exec history for the completed task so a
-		// restart can resume (§11.3.3 — resume with integrity).
-		if err := s.conversation.Persist(ctx, string(ev.Task)); err == nil {
-			return "conversation", 1
+	case *event.TaskStartedEvent:
+		// §11.3.1: task.created → Working Memory sets the task.
+		s.working.SetTask(ev.Goal)
+		s.working.SetState("") // fresh task, no state yet
+		return "working", 1
+	case *event.StateChangeEvent:
+		// §11.3.1: state.change → Working Memory updates the state.
+		s.working.SetState(ev.To)
+		return "working", 1
+	case *event.VerificationFailedEvent:
+		// §11.5.1: verify.fail → record the failure insight. Reason is the
+		// lesson text; Source tags the teaching event so a reader can attribute.
+		s.insights.Record(ctx, ev.Reason, "verify.fail")
+		return "knowledge", 1
+	case *event.VerificationStageEvent:
+		// §11.5.1: a passing/failing stage is a teaching signal. Skip neutral
+		// statuses and empty detail (no insight to record).
+		if ev.Status != "pass" && ev.Status != "fail" {
+			return "", 0
+		}
+		text := ev.Stage + ": " + ev.Detail
+		if ev.Detail == "" {
+			text = ev.Stage
+		}
+		s.insights.Record(ctx, text, "verify."+ev.Status)
+		return "knowledge", 1
+	case *event.UserPreferenceEvent:
+		// §11.5.2: user.preference → Preference store (the one user-editable
+		// sub-store; agent-originated updates are still event-driven, §11.2).
+		if err := s.pref.Set(ctx, ev.Key, ev.Value); err == nil {
+			return "preference", 1
 		}
 		return "", 0
+	case *event.TaskCompletedEvent:
+		// §11.3.1 + §11.5.1: task.completed → clear Working (fast), record a
+		// Knowledge success pattern (fast, in-memory embed), then offload the
+		// slow file I/O (Persist conversation/exec/knowledge) so the drain
+		// stays fast and publishUpdate doesn't deadlock on a full channel.
+		// Tracked on bg so Close waits for it (no racing a temp-dir cleanup).
+		s.working.Clear()
+		s.insights.Record(ctx, "task.completed: "+string(ev.Task), "task.completed")
+		tid := string(ev.Task)
+		s.bg.Add(1)
+		go func() {
+			defer s.bg.Done()
+			_ = s.conversation.Persist(context.Background(), tid)
+			_ = s.exec.Persist(context.Background(), tid)
+			_ = s.insights.Persist(context.Background())
+		}()
+		return "working", 1
 	}
 	return "", 0
 }
@@ -106,6 +168,16 @@ func (s *Store) dispatch(e event.Event) (store string, items int) {
 // publishUpdate emits the memory.update event naming the store that learned
 // and how many items (File 11 §5.4.5). Best-effort: a nil bus (unit test) or a
 // dropped event is survivable — the sub-store already mutated.
+//
+// This is SYNCHRONOUS (not a goroutine) so the event's Seq is deterministic
+// relative to the spine — the golden transcript is byte-identical across runs
+// (S5). The reentrant-backpressure deadlock this could cause (the drain holds
+// the channel while Publish wants fanoutMu, which the drive loop holds while
+// blocked on that same full channel) is avoided upstream in dispatch: slow
+// I/O reactions (Persist, Reindex) are offloaded to background goroutines, so
+// the drain loop stays fast, the listener channel never fills, and the drive
+// loop's fan-out never blocks on it → fanoutMu is released before publishUpdate
+// runs here.
 func (s *Store) publishUpdate(task event.TaskID, store string, items int) {
 	if s.bus == nil {
 		return
