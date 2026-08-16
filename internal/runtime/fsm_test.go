@@ -40,15 +40,17 @@ func TestTerminalStates(t *testing.T) {
 	}
 }
 
-// TestTransitionTableCoversAll21Edges is the L2-001 headline: the table must
-// contain every transition T1–T21 from File 04 §4.2, no more, no less. A
+// TestTransitionTableCoversAll22Edges is the L2-001 headline: the table must
+// contain every transition T1–T22 from File 04 §4.2, no more, no less. A
 // missing or extra edge is an FSM contract regression. (T21 — EXECUTE→PLAN on
 // turn_done — was added so a Planner turn whose tool calls are all dispatched
-// hands back to PLAN instead of dead-ending.)
-func TestTransitionTableCoversAll21Edges(t *testing.T) {
+// hands back to PLAN instead of dead-ending. T22 — VERIFY→EXECUTE on
+// verify_pass_drain — was added so a turn's remaining tool calls are drained
+// without a round-trip through PLAN.)
+func TestTransitionTableCoversAll22Edges(t *testing.T) {
 	table := transitionTable()
-	if len(table) != 21 {
-		t.Fatalf("transition table has %d edges, want 21 (T1–T21)", len(table))
+	if len(table) != 22 {
+		t.Fatalf("transition table has %d edges, want 22 (T1–T22)", len(table))
 	}
 	// Every edge must be uniquely keyed by (from, signal) — the FSM dispatches
 	// on (current state, incoming signal), so duplicates are ambiguous.
@@ -62,7 +64,7 @@ func TestTransitionTableCoversAll21Edges(t *testing.T) {
 	}
 }
 
-// TestTransitionEdgesMatchSpec asserts each T1–T21 edge has the (from, signal,
+// TestTransitionEdgesMatchSpec asserts each T1–T22 edge has the (from, signal,
 // to) triple the spec fixes. A drift here changes the agent's observable
 // behavior, so it is caught explicitly.
 func TestTransitionEdgesMatchSpec(t *testing.T) {
@@ -92,6 +94,7 @@ func TestTransitionEdgesMatchSpec(t *testing.T) {
 		{"T19", StateAny, StateError, SigHardError},
 		{"T20", StateError, StateInit, SigUserAckError},
 		{"T21", StateExecute, StatePlan, SigTurnDone},
+		{"T22", StateVerify, StateExecute, SigVerifyPassDrain},
 	}
 	table := transitionTable()
 	got := make(map[string]edge, len(table))
@@ -218,5 +221,45 @@ func TestFSMExecuteTurnDoneGoesToPlan(t *testing.T) {
 	}
 	if bad.current() != StateExecute {
 		t.Errorf("after failed transition, current = %q, want unchanged EXECUTE", bad.current())
+	}
+}
+
+// TestFSMVerifyPassDrainGoesToExecute pins T22, the drain edge. A turn may emit
+// several tool calls; each is dispatched (EXECUTE→WAIT_TOOL) and verified
+// (WAIT_TOOL→VERIFY), and while calls remain VERIFY hands straight back to
+// EXECUTE rather than to PLAN. Routing through PLAN (T11) was the bug: PLAN
+// re-stashes turn.ToolCalls, clobbering the undrained remainder, and costs an
+// LLM round-trip per tool call. The drain and the "turn finished, replan" edges
+// stay distinct signals so the graph says which one fired.
+func TestFSMVerifyPassDrainGoesToExecute(t *testing.T) {
+	fsm := newFSM(StateVerify)
+
+	from, to, err := fsm.transition(SigVerifyPassDrain, "verify_pass_drain")
+	if err != nil {
+		t.Fatalf("transition(VERIFY, verify_pass_drain): %v, want nil (T22)", err)
+	}
+	if from != StateVerify || to != StateExecute {
+		t.Errorf("transition(VERIFY, verify_pass_drain) = (%q→%q), want VERIFY→EXECUTE", from, to)
+	}
+	if fsm.current() != StateExecute {
+		t.Errorf("current = %q, want EXECUTE after T22", fsm.current())
+	}
+
+	// The drain must not disturb the sibling verify-pass edges: an empty queue
+	// still routes to PLAN (T11) or DONE (T12).
+	more := newFSM(StateVerify)
+	if _, to, err := more.transition(SigVerifyPassMore, "more"); err != nil || to != StatePlan {
+		t.Errorf("transition(VERIFY, verify_pass_more) = (%q, %v), want PLAN (T11)", to, err)
+	}
+	done := newFSM(StateVerify)
+	if _, to, err := done.transition(SigVerifyPassDone, "done"); err != nil || to != StateDone {
+		t.Errorf("transition(VERIFY, verify_pass_done) = (%q, %v), want DONE (T12)", to, err)
+	}
+
+	// The drain signal is VERIFY-only — it must not resolve from anywhere else.
+	for _, s := range []State{StatePlan, StateExecute, StateWaitTool, StatePatch} {
+		if _, ok := newFSM(s).lookup(s, SigVerifyPassDrain); ok {
+			t.Errorf("lookup(%q, verify_pass_drain) resolved; T22 is VERIFY→EXECUTE only", s)
+		}
 	}
 }

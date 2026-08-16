@@ -202,8 +202,9 @@ func (m *multiTurnCog) Think(context.Context, Prompt) (CognitiveTurn, error) {
 	}
 }
 
-func (m *multiTurnCog) HasMore(*session.Task) bool      { return true }
-func (m *multiTurnCog) RecordToolResult(string, string) {}
+func (m *multiTurnCog) HasMore(*session.Task) bool              { return true }
+func (m *multiTurnCog) RecordToolResult(string, string, string) {}
+func (m *multiTurnCog) Reset()                                  {}
 func (m *multiTurnCog) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
 	return ReflectionDecision{Abort: true}
 }
@@ -252,5 +253,227 @@ func TestDriveMultiTurnToolLoopReachesDone(t *testing.T) {
 	got := core.session.LoadTaskPublic(tid)
 	if got == nil || got.Status != session.StatusDone {
 		t.Errorf("task status = %+v, want DONE (multi-turn loop reached terminal)", got)
+	}
+}
+
+// multiToolCog emits THREE tool calls in a single turn (the shape a model takes
+// when it asks to read three files at once), then answers Final on the next
+// turn. HasMore stays true so a passing VERIFY does not short-circuit to DONE.
+type multiToolCog struct {
+	calls   int
+	resets  int
+	results []string // tool names fed back via RecordToolResult
+}
+
+func (m *multiToolCog) Think(context.Context, Prompt) (CognitiveTurn, error) {
+	m.calls++
+	if m.calls == 1 {
+		return CognitiveTurn{Final: false, ToolCalls: []ToolCall{
+			{Tool: "read_a", Reason: "read a.go"},
+			{Tool: "read_b", Reason: "read b.go"},
+			{Tool: "read_c", Reason: "read c.go"},
+		}}, nil
+	}
+	return CognitiveTurn{Final: true, Text: "read all three"}, nil
+}
+
+func (m *multiToolCog) HasMore(*session.Task) bool { return true }
+func (m *multiToolCog) RecordToolResult(_, tool, _ string) {
+	m.results = append(m.results, tool)
+}
+func (m *multiToolCog) Reset() { m.resets++ }
+func (m *multiToolCog) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true}
+}
+
+// echoExecutor dispatches every call and echoes the tool name back in the
+// observation, recording the order it saw them in.
+type echoExecutor struct {
+	dispatched []string
+}
+
+func (e *echoExecutor) NeedsApproval(ToolCall) bool { return false }
+func (e *echoExecutor) Dispatch(_ context.Context, call ToolCall) (Observation, error) {
+	e.dispatched = append(e.dispatched, call.Tool)
+	return Observation{Tool: call.Tool, Stdout: "out:" + call.Tool}, nil
+}
+
+// TestDriveDrainsEveryToolCallInOneTurn is the regression test for the dropped
+// tool calls (calls 2..N never executed). PLAN stashes the turn's calls in
+// h.pending; EXECUTE dispatches the head and WAIT_TOOL→VERIFY follows. Before
+// T22, a passing VERIFY routed back to PLAN (T11), whose `h.pending =
+// turn.ToolCalls` clobbered the undrained remainder — so exactly one call per
+// turn ever ran and the model reasoned on results it never got. T22
+// (VERIFY→EXECUTE on verify_pass_drain) sends the loop back to EXECUTE while
+// calls remain, making the "EXECUTE drains them" comment true.
+func TestDriveDrainsEveryToolCallInOneTurn(t *testing.T) {
+	cog := &multiToolCog{}
+	exec := &echoExecutor{}
+	store := session.NewFileStore(filepath.Join(t.TempDir(), "store"))
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	smgr := session.New(session.Deps{Store: store, Bus: bus, Git: session.NewInMemCheckpointer()})
+	core := New(Deps{Bus: bus, Session: smgr, Cognitive: cog, Exec: exec})
+	sid, err := smgr.OpenSession(context.Background(), "proj", "demo")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	ch := bus.Subscribe(">")
+	tid, err := core.Submit(context.Background(), sid, "read a.go, b.go and c.go")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	drainUntilQuiet(t, ch, 300*time.Millisecond)
+
+	want := []string{"read_a", "read_b", "read_c"}
+	if len(exec.dispatched) != len(want) {
+		t.Fatalf("Executor dispatched %v (%d calls), want all %v — calls 2..N were dropped",
+			exec.dispatched, len(exec.dispatched), want)
+	}
+	for i, w := range want {
+		if exec.dispatched[i] != w {
+			t.Errorf("dispatched[%d] = %q, want %q (queue order)", i, exec.dispatched[i], w)
+		}
+	}
+	// Every result must reach the cognitive core, else the next Think reasons on
+	// a partial picture.
+	if len(cog.results) != len(want) {
+		t.Errorf("RecordToolResult saw %v, want all %v", cog.results, want)
+	}
+	// One turn drained all three: the Planner was asked exactly twice (turn 1
+	// with the tool calls, turn 2 with the final answer). More would mean a
+	// wasted LLM round-trip per tool call.
+	if cog.calls != 2 {
+		t.Errorf("Think called %d times, want 2 (draining must not re-enter PLAN per tool)", cog.calls)
+	}
+	if got := core.session.LoadTaskPublic(tid); got == nil || got.Status != session.StatusDone {
+		t.Errorf("task status = %+v, want DONE", got)
+	}
+}
+
+// TestSubmitResetsCognitiveConversation pins the per-task transcript reset: a
+// new task's drive loop must start from a clean conversation, otherwise the
+// previous task's history leaks into the next one (and a repeated goal is
+// merged into what is already there instead of being genuinely re-asked).
+func TestSubmitResetsCognitiveConversation(t *testing.T) {
+	cog := &multiToolCog{}
+	core, _, sid := newCoreWithCog(t, cog)
+	if _, err := core.Submit(context.Background(), sid, "first task"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if cog.resets != 1 {
+		t.Fatalf("Reset called %d times after one Submit, want 1", cog.resets)
+	}
+	if _, err := core.Submit(context.Background(), sid, "second task"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if cog.resets != 2 {
+		t.Errorf("Reset called %d times after two Submits, want 2 (each task starts a fresh transcript)", cog.resets)
+	}
+}
+
+// pairingCog stands in for cognitive.Core's result pairing inside the runtime
+// package. One turn emits two calls to the SAME tool, distinguishable only by
+// their provider ids. RecordToolResult mirrors the real core's takePending
+// rule — an exact id match first, then the oldest outstanding call of that tool
+// name — so a runtime that forwards no id lands on the name fallback, which is
+// exactly what mispairs when results do not come back in dispatch order.
+type pairingCog struct {
+	calls   int
+	pending []ToolCall        // calls emitted this turn, awaiting a result
+	paired  map[string]string // call id → the result recorded against it
+}
+
+func (c *pairingCog) Think(context.Context, Prompt) (CognitiveTurn, error) {
+	c.calls++
+	if c.calls == 1 {
+		c.pending = []ToolCall{
+			{ID: "call_a", Tool: "read_file", Reason: "read a.go"},
+			{ID: "call_b", Tool: "read_file", Reason: "read b.go"},
+		}
+		return CognitiveTurn{Final: false, ToolCalls: c.pending}, nil
+	}
+	return CognitiveTurn{Final: true, Text: "read both"}, nil
+}
+
+func (c *pairingCog) HasMore(*session.Task) bool { return true }
+
+func (c *pairingCog) RecordToolResult(callID, toolName, result string) {
+	if c.paired == nil {
+		c.paired = make(map[string]string)
+	}
+	c.paired[c.take(callID, toolName)] = result
+}
+
+// take resolves the outstanding call a result answers, id first, then the
+// oldest of the same tool name (cognitive.Core.takePending's fallback).
+func (c *pairingCog) take(callID, toolName string) string {
+	if callID != "" {
+		for i, p := range c.pending {
+			if p.ID == callID {
+				c.pending = append(c.pending[:i], c.pending[i+1:]...)
+				return p.ID
+			}
+		}
+	}
+	for i, p := range c.pending {
+		if p.Tool == toolName {
+			c.pending = append(c.pending[:i], c.pending[i+1:]...)
+			return p.ID
+		}
+	}
+	return ""
+}
+
+func (c *pairingCog) Reset() { c.pending, c.paired = nil, nil }
+func (c *pairingCog) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true}
+}
+
+// reorderingExecutor completes the turn's two calls out of dispatch order: the
+// first Dispatch returns call_b's output, the second returns call_a's. Each
+// observation names its true owner via CallID, which is what a real executor
+// running calls concurrently must do. Nothing but that id can tell the two
+// apart — both are read_file.
+type reorderingExecutor struct{ n int }
+
+func (e *reorderingExecutor) NeedsApproval(ToolCall) bool { return false }
+func (e *reorderingExecutor) Dispatch(_ context.Context, _ ToolCall) (Observation, error) {
+	e.n++
+	if e.n == 1 {
+		return Observation{Tool: "read_file", CallID: "call_b", Stdout: "contents of b"}, nil
+	}
+	return Observation{Tool: "read_file", CallID: "call_a", Stdout: "contents of a"}, nil
+}
+
+// TestDrivePairsToolResultToItsCallID is the mispairing regression, end to end
+// through the drive loop. A turn asks to read two files; the executor returns
+// the results in the reverse order. The runtime must forward each observation's
+// CallID to the cognitive core, or the core falls back to name-oldest-first and
+// hands the model b.go's contents as the answer to the a.go call — the model
+// then reasons on swapped files with no way to notice.
+func TestDrivePairsToolResultToItsCallID(t *testing.T) {
+	cog := &pairingCog{}
+	exec := &reorderingExecutor{}
+	store := session.NewFileStore(filepath.Join(t.TempDir(), "store"))
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	smgr := session.New(session.Deps{Store: store, Bus: bus, Git: session.NewInMemCheckpointer()})
+	core := New(Deps{Bus: bus, Session: smgr, Cognitive: cog, Exec: exec})
+	sid, err := smgr.OpenSession(context.Background(), "proj", "demo")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	ch := bus.Subscribe(">")
+	if _, err := core.Submit(context.Background(), sid, "read a.go and b.go"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	drainUntilQuiet(t, ch, 300*time.Millisecond)
+
+	want := map[string]string{"call_a": "contents of a", "call_b": "contents of b"}
+	for id, w := range want {
+		if got := cog.paired[id]; got != w {
+			t.Errorf("result paired to %s = %q, want %q — the observation's CallID did not reach the cognitive core, so the model sees the wrong file's contents", id, got, w)
+		}
 	}
 }

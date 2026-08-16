@@ -55,7 +55,8 @@ func (c *patchCognitive) Reflect(_ context.Context, _ *session.Task, _ Verdict, 
 	return ReflectionDecision{Patch: PatchOp{Body: []byte("corrective")}}
 }
 
-func (*patchCognitive) RecordToolResult(string, string) {}
+func (*patchCognitive) RecordToolResult(string, string, string) {}
+func (*patchCognitive) Reset()                                  {}
 
 // applyExecutor is an Executor that always dispatches (no approval needed) and
 // records the observation as from-a-patch so VERIFY inspects the touched files.
@@ -262,6 +263,246 @@ func TestDriveVerifyFailReflectionAbortStopsTheLoop(t *testing.T) {
 	task := core.session.LoadTaskPublic(tid)
 	if task == nil {
 		t.Fatal("task vanished")
+	}
+}
+
+// loopingCognitive never converges: every Think emits another tool call and
+// HasMore always says there is more, so the FSM cycles PLAN→EXECUTE→WAIT_TOOL
+// →VERIFY→PLAN indefinitely. giveUpAfter is a test-only escape hatch so an
+// uncapped run ends the test instead of hanging it.
+type loopingCognitive struct {
+	mu          sync.Mutex
+	turns       int
+	giveUpAfter int
+}
+
+func (c *loopingCognitive) Think(context.Context, Prompt) (CognitiveTurn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.turns++
+	if c.turns >= c.giveUpAfter {
+		return CognitiveTurn{Final: true, Text: "gave up"}, nil
+	}
+	return CognitiveTurn{ToolCalls: []ToolCall{{Tool: "bash", Reason: "keep going"}}}, nil
+}
+
+func (c *loopingCognitive) HasMore(*session.Task) bool { return true }
+func (c *loopingCognitive) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true, Note: "looping cognitive has no reflection"}
+}
+func (*loopingCognitive) RecordToolResult(string, string, string) {}
+func (*loopingCognitive) Reset()                                  {}
+
+func (c *loopingCognitive) turnCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.turns
+}
+
+// capLedger is a CostLedger whose hard cap trips after `allow` loops — the
+// shape *cognitive.Cost takes once MaxTime elapses on a task that keeps
+// planning, expressed in loop counts so the test needs no sleep and the runtime
+// needs no import of cognitive. It also records the token pairs it was given,
+// so a test can assert the drive loop bills a turn only when the provider
+// actually reported usage.
+type capLedger struct {
+	mu         sync.Mutex
+	allow      int
+	loops      int
+	registered []session.TaskID
+	tokens     [][2]int
+}
+
+func (l *capLedger) RegisterTask(id session.TaskID) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.registered = append(l.registered, id)
+}
+
+func (l *capLedger) IncLoop(session.TaskID) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.loops++
+}
+
+func (l *capLedger) AddTokens(_ session.TaskID, in, out int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tokens = append(l.tokens, [2]int{in, out})
+}
+
+func (l *capLedger) HardCapExceeded(session.TaskID) (bool, string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loops > l.allow, "time cap"
+}
+
+func (l *capLedger) counts() (loops int, registered []session.TaskID) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.loops, append([]session.TaskID(nil), l.registered...)
+}
+
+func (l *capLedger) billed() [][2]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([][2]int(nil), l.tokens...)
+}
+
+// TestDriveCostCapAbortsRunawayLoop is the runaway-guard headline: a task that
+// never converges must be stopped BY THE DRIVE LOOP, visibly. The ledger is
+// exercised through the real PLAN arm (not called directly), the abort lands in
+// the terminal CANCELLED state, and cost.abort states the cause.
+func TestDriveCostCapAbortsRunawayLoop(t *testing.T) {
+	store := session.NewFileStore(t.TempDir())
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	smgr := session.New(session.Deps{Store: store, Bus: bus, Git: session.NewInMemCheckpointer()})
+	sid, err := smgr.OpenSession(context.Background(), "proj", "demo")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	cog := &loopingCognitive{giveUpAfter: 50}
+	ledger := &capLedger{allow: 3}
+	core := New(Deps{
+		Bus:       bus,
+		Session:   smgr,
+		Cognitive: cog,
+		Exec:      &applyExecutor{},
+		Cost:      ledger,
+	})
+
+	// Drain concurrently: an uncapped run outruns the subscriber buffer and
+	// would deadlock on backpressure instead of failing.
+	ch := bus.Subscribe(">")
+	done := make(chan session.TaskID, 1)
+	go func() {
+		tid, _ := core.Submit(context.Background(), sid, "never converge")
+		done <- tid
+	}()
+
+	var sawAbort bool
+	var cancelWhy string
+	record := func(env event.Envelope) {
+		switch e := env.Evt.(type) {
+		case *event.CostAbortEvent:
+			sawAbort = true
+		case *event.StateChangeEvent:
+			if e.To == string(StateCancelled) {
+				cancelWhy = e.Why
+			}
+		}
+	}
+
+	var tid session.TaskID
+	for returned := false; !returned; {
+		select {
+		case env := <-ch:
+			record(env)
+		case tid = <-done:
+			returned = true
+		case <-time.After(10 * time.Second):
+			t.Fatal("drive loop never returned")
+		}
+	}
+	for draining := true; draining; {
+		select {
+		case env := <-ch:
+			record(env)
+		default:
+			draining = false
+		}
+	}
+
+	loops, registered := ledger.counts()
+	if len(registered) != 1 || registered[0] != tid {
+		t.Errorf("ledger.RegisterTask calls = %v, want [%s] (the deadline must start at task start)", registered, tid)
+	}
+	if loops == 0 {
+		t.Error("ledger.IncLoop never ran — the drive loop does not count its own loops, so the degradation ladder can never advance")
+	}
+	// The looping planner reports no usage, so the ledger must have been billed
+	// nothing. Billing 0/0 per turn is what would let a provider that reports
+	// no tokens look free forever.
+	if billed := ledger.billed(); len(billed) != 0 {
+		t.Errorf("ledger.AddTokens calls = %v, want none (the planner reported no usage)", billed)
+	}
+	if got := cog.turnCount(); got != ledger.allow {
+		t.Errorf("planner turns = %d, want %d (the cap must stop the run, not the planner giving up)", got, ledger.allow)
+	}
+	if !sawAbort {
+		t.Error("no cost.abort event — the run stopped without telling the user why")
+	}
+	if cancelWhy != "cost_cap" {
+		t.Errorf("CANCELLED why = %q, want cost_cap (the cap must reach a terminal state)", cancelWhy)
+	}
+	if task := smgr.LoadTaskPublic(tid); task == nil || task.Status != session.StatusCancelled {
+		t.Errorf("task status = %v, want CANCELLED", task)
+	}
+}
+
+// usageCognitive answers directly and reports the usage it was given, so a test
+// can drive the billing path with and without a measurement.
+type usageCognitive struct {
+	in, out int
+	known   bool
+}
+
+func (c usageCognitive) Think(context.Context, Prompt) (CognitiveTurn, error) {
+	return CognitiveTurn{
+		Final: true, Text: "done",
+		TokensIn: c.in, TokensOut: c.out, UsageKnown: c.known,
+	}, nil
+}
+
+func (usageCognitive) HasMore(*session.Task) bool { return false }
+func (usageCognitive) Reflect(context.Context, *session.Task, Verdict, Observation) ReflectionDecision {
+	return ReflectionDecision{Abort: true}
+}
+func (usageCognitive) RecordToolResult(string, string, string) {}
+func (usageCognitive) Reset()                                  {}
+
+// TestDriveBillsOnlyMeasuredTurns is the other half of the honesty rule the
+// whole cost pass turns on. A provider that reports usage must be billed the
+// real counts; a provider that reports nothing must be billed nothing at all,
+// NOT zero. Billing 0/0 is what let the spend cap sit permanently at $0.00 for
+// exactly the providers whose cost nobody could see.
+func TestDriveBillsOnlyMeasuredTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cog  usageCognitive
+		want [][2]int
+	}{
+		{"measured", usageCognitive{in: 1200, out: 340, known: true}, [][2]int{{1200, 340}}},
+		{"unmeasured", usageCognitive{known: false}, nil},
+		{"measured zero output", usageCognitive{in: 7, out: 0, known: true}, [][2]int{{7, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := event.New()
+			t.Cleanup(func() { _ = bus.Close() })
+			smgr := session.New(session.Deps{
+				Store: session.NewFileStore(t.TempDir()), Bus: bus,
+				Git: session.NewInMemCheckpointer(),
+			})
+			sid, err := smgr.OpenSession(context.Background(), "proj", "demo")
+			if err != nil {
+				t.Fatalf("OpenSession: %v", err)
+			}
+			ledger := &capLedger{allow: 100} // never trips; we are watching the billing
+			core := New(Deps{Bus: bus, Session: smgr, Cognitive: tc.cog, Cost: ledger})
+			if _, err := core.Submit(context.Background(), sid, "answer"); err != nil {
+				t.Fatalf("Submit: %v", err)
+			}
+			got := ledger.billed()
+			if len(got) != len(tc.want) {
+				t.Fatalf("AddTokens calls = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("AddTokens[%d] = %v, want %v", i, got[i], tc.want[i])
+				}
+			}
+		})
 	}
 }
 

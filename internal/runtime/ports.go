@@ -27,19 +27,32 @@ type ContextPackage = any
 // any so the real prompt shape (Sprint 2+) flows through.
 type Prompt = any
 
-// ToolCall is a tool the Planner chose (File 07 §5.4.3 shape, collapsed).
+// ToolCall is a tool the Planner chose (File 07 §5.4.3 shape, collapsed). ID is
+// the provider's tool_call_id, threaded through so the result can be paired back
+// to this exact call — a turn calling one tool twice is indistinguishable by
+// name. Empty for calls that carry no wire id (fenced ```tool blocks).
 type ToolCall struct {
+	ID     string
 	Tool   string
 	Args   []byte // json.RawMessage
 	Reason string
 	Task   event.TaskID // causal task id, threaded by the runtime before dispatch
+	// PreApproved is set by the runtime, not by the Planner: the runtime's own
+	// approval gate parks the FSM and asks the human, and this tells the
+	// Executor the answer already came back yes for this call so it must not
+	// ask again. Two gates guard the same dispatch; without this the user
+	// answers the same question twice.
+	PreApproved bool
 }
 
 // Observation is a tool's result (File 08). Opaque payload; Files lists the
 // paths the tool/patch touched so VERIFY knows what to check; Checkpoint is the
 // checkpoint name a patch tool recorded, the runtime Restores on a verify
 // failure. Tool carries the tool name so the runtime can feed results back
-// to the cognitive core for multi-turn agent loops.
+// to the cognitive core for multi-turn agent loops; CallID names the exact call
+// this answers. An Executor that can complete calls out of dispatch order MUST
+// set CallID — the name alone cannot distinguish two calls to the same tool.
+// Left empty, the runtime fills it with the call it dispatched.
 type Observation struct {
 	FromPatch  bool
 	Payload    []byte // json.RawMessage
@@ -48,6 +61,7 @@ type Observation struct {
 	Stdout     string
 	Summary    string
 	Tool       string // the tool name that produced this observation
+	CallID     string // the ToolCall.ID this observation answers
 }
 
 // VerifyPolicy is the runtime's opaque view of cognitive.VerificationPolicy
@@ -128,28 +142,53 @@ type PromptCompiler interface {
 
 // CognitiveTurn is one Planner turn (File 07): either a final answer or a set
 // of tool calls.
+// TokensIn/TokensOut are the provider's own counts for the turn, and are only
+// a measurement when UsageKnown is true. Most local runners report nothing, so
+// the pair is 0/0 far more often than it is real; a reader that prices or
+// budgets on them must check UsageKnown first, or it charges every silent
+// provider zero.
 type CognitiveTurn struct {
-	Final     bool
-	Text      string
-	ToolCalls []ToolCall
+	Final      bool
+	Text       string
+	ToolCalls  []ToolCall
+	TokensIn   int
+	TokensOut  int
+	UsageKnown bool
 }
 
 // CognitiveCore drives planning, reflection, and tool selection (File 07).
 // Think is the Planner turn; HasMore decides VERIFY→PLAN vs VERIFY→DONE; Reflect
 // is the verify-failure handoff (File 07 §7.3) — the runtime calls it when a
 // Verdict fails and acts on the Replan/Patch/Abort decision. RecordToolResult
-// feeds a tool's output back into the conversation so the next Think sees it.
+// feeds a tool's output back into the conversation so the next Think sees it;
+// callID names the call it answers so a turn with several calls to the same
+// tool pairs each result correctly ("" means "no id, guess").
+// Reset drops the accumulated conversation; the runtime calls it as each new
+// task's drive loop begins so one task's transcript does not leak into the
+// next. Like the rest of the port it is called from the drive goroutine only.
 type CognitiveCore interface {
 	Think(ctx context.Context, msgs Prompt) (CognitiveTurn, error)
 	HasMore(task *session.Task) bool
 	Reflect(ctx context.Context, task *session.Task, v Verdict, obs Observation) ReflectionDecision
-	RecordToolResult(toolName, result string)
+	RecordToolResult(callID, toolName, result string)
+	Reset()
 }
 
 // Executor dispatches tools under the sandbox (File 08).
 type Executor interface {
 	NeedsApproval(call ToolCall) bool
 	Dispatch(ctx context.Context, call ToolCall) (Observation, error)
+}
+
+// RiskClassifier is an optional half of Executor: an executor that knows how
+// dangerous a call is can say so, and the runtime puts the class in the
+// approval.request it publishes. Kept off Executor itself because it is not
+// needed to run a tool — every test double and the noop stub would have to grow
+// a method that only the prompt text uses. The runtime type-asserts for it and
+// leaves Risk empty when the executor doesn't classify, which the TUI renders
+// as no risk line rather than as a wrong one.
+type RiskClassifier interface {
+	RiskOf(call ToolCall) event.Risk
 }
 
 // Verifier runs the verification pipeline (File 09). The VerifyPolicy selects
@@ -299,11 +338,43 @@ type WorkflowEngine interface {
 	Next(goal string, state *WFState, ev WFEvent) (WFAction, error)
 }
 
+// --- Cost ports (sibling package internal/cognitive) ---
+//
+// The runtime may not import internal/cognitive (import matrix File 15
+// §15.15.2), so the Cost Controller (File 07 §7.6) is a port here. The method
+// set is deliberately the subset of *cognitive.Cost the drive loop needs AND
+// deliberately spelled with the same signatures, so the composition root wires
+// the real controller directly (`Cost: costCtl`) with no adapter to write —
+// one less place for the wiring to be forgotten.
+
+// CostLedger is the runtime's view of the Cost Controller (File 07 §7.6). The
+// drive loop is the only thing that loops, so it is the honest home of the
+// loop/time caps: it registers the task (starting the MaxTime deadline), counts
+// one loop per PLAN turn, and asks whether the budget still permits another.
+//
+// HardCapExceeded — not ReflectionAllowed — is what the loop stops on, and it
+// returns the name of the cap that fired so the abort can say which one. The
+// distinction matters: ReflectionAllowed also goes false at MaxLoops, which is
+// a degradation rung ("keep going, without reflection"), and treating that as
+// "stop" turns a tuning threshold into a kill switch.
+//
+// AddTokens takes the provider's real counts, so it must only be called for a
+// turn whose usage is actually known; a turn nobody measured contributes
+// nothing rather than a free 0. A nil Deps.Cost installs noopCostLedger and the
+// loop stays uncapped, exactly as before.
+type CostLedger interface {
+	RegisterTask(id session.TaskID)
+	IncLoop(id session.TaskID)
+	AddTokens(id session.TaskID, in, out int)
+	HardCapExceeded(id session.TaskID) (bool, string)
+}
+
 // Deps are the runtime's collaborators (File 04 §4.6). Bus and Session are
 // required; the rest default to no-op stubs (wireDeps fills them) so a Sprint 1
-// stubbed single-turn loop builds with only event+session present. Scope and
-// Workflow are optional — a nil value disables scope control / dynamic
-// workflow and the runtime falls back to its legacy fixed FSM flow.
+// stubbed single-turn loop builds with only event+session present. Scope,
+// Workflow and Cost are optional — a nil value disables scope control /
+// dynamic workflow / the cost caps and the runtime falls back to its legacy
+// fixed FSM flow.
 type Deps struct {
 	Bus       *event.Bus
 	Session   *session.Manager
@@ -317,4 +388,5 @@ type Deps struct {
 	Memory    MemoryStore
 	Scope     ScopeController // optional; nil → no scope control
 	Workflow  WorkflowEngine  // optional; nil → legacy fixed FSM flow
+	Cost      CostLedger      // optional; nil → no loop/time cap
 }
