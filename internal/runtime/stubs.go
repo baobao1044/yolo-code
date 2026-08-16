@@ -39,7 +39,10 @@ func (s StubCognitive) Think(context.Context, Prompt) (CognitiveTurn, error) {
 
 func (StubCognitive) HasMore(*session.Task) bool { return false }
 
-func (StubCognitive) RecordToolResult(string, string) {}
+func (StubCognitive) RecordToolResult(string, string, string) {}
+
+// Reset is a no-op: the stub holds no conversation to drop.
+func (StubCognitive) Reset() {}
 
 // Reflect on a StubCognitive aborts (the stub never takes the tool path, so a
 // verify failure here would be a wiring bug — abort surfaces it loudly rather
@@ -96,6 +99,16 @@ func (noopScopeController) SuggestTransition(ScopeVerdict) ScopeTransition {
 func (noopScopeController) RecordFact(string)             {}
 func (noopScopeController) RecordFailedHypothesis(string) {}
 func (noopScopeController) RecordPatch(int, string, bool) {}
+
+// noopCostLedger is the disabled-cost stub: it counts nothing and always says
+// the budget is open. New uses this when Deps.Cost is nil, so the drive loop's
+// cap calls are safe but inert — preserving the uncapped pre-cost behaviour.
+type noopCostLedger struct{}
+
+func (noopCostLedger) RegisterTask(session.TaskID)                   {}
+func (noopCostLedger) IncLoop(session.TaskID)                        {}
+func (noopCostLedger) AddTokens(session.TaskID, int, int)            {}
+func (noopCostLedger) HardCapExceeded(session.TaskID) (bool, string) { return false, "" }
 
 // noopWorkflowEngine returns a submit action immediately: when no dynamic
 // workflow is wired, the runtime relies on its fixed FSM flow and the engine

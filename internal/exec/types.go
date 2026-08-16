@@ -28,6 +28,17 @@ type ToolCall struct {
 	Args   []byte
 	Reason string
 	Task   event.TaskID
+	// PreApproved says a human already approved this exact call at a higher
+	// layer, so Dispatch must not ask again. The runtime's own gate parks the
+	// FSM and prompts before it dispatches; without this the engine prompts a
+	// second time for the same call and the user has to answer twice.
+	//
+	// It is deliberately per-call rather than a config switch: turning the
+	// engine's gate off wholesale would also silence it for the callers that
+	// dispatch without a runtime in front of them (coord's read_file and
+	// `go version` probes), and a gate that is off for reasons you cannot see
+	// at the call site is how this codebase got here.
+	PreApproved bool
 }
 
 // ToolInput is what a tool's Run receives. Args mirrors the call's args; the
@@ -46,6 +57,24 @@ type ToolOutput struct {
 	ExitCode int
 	Summary  string
 	Files    []string // paths the tool mutated (for memory invalidation)
+	// FilesUnknown says the tool could not determine what it changed, as
+	// distinct from having determined that it changed nothing.
+	//
+	// Files alone cannot carry that difference, and the difference is the whole
+	// question downstream: cmd/yolo's verify adapter turns an empty list into a
+	// Change with no files, over which every verification stage skips. The
+	// verify engine now fails closed on that (noSignalVerdict), which is the
+	// right floor but only a floor — a caller that wants to tell "this command
+	// wrote nothing, there is nothing to verify" apart from "this command may
+	// have rewritten the tree and the detector could not keep up" has nowhere
+	// else to look.
+	//
+	// A tool that sets this must leave Files empty. A consumer that ignores the
+	// flag then sees the empty list and takes the fail-closed path, which is
+	// survivable; the state that must never be reachable is a partial list
+	// presented as complete, because VERIFY would pass on the part it was shown
+	// and certify the part it was not.
+	FilesUnknown bool
 }
 
 // Observation is the structured, publishable result (File 08 §8.6.4): what
@@ -62,6 +91,16 @@ type Observation struct {
 	Bytes     int
 	Files     []string
 	FromPatch bool
+	// FilesUnknown mirrors ToolOutput.FilesUnknown through the normalizer; see
+	// its comment for why the three states have to stay distinguishable.
+	//
+	// The json tag is the one departure from this struct's untagged style, and
+	// it is deliberate. Observation is marshalled whole into
+	// event.ToolResultEvent.Obs, and cmd/yolo's golden test hashes that
+	// transcript byte for byte — an unconditional `"FilesUnknown":false` on
+	// every tool result in the tree would be a wire change with no information
+	// in it. omitempty keeps the field on the wire only when it says something.
+	FilesUnknown bool `json:"FilesUnknown,omitempty"`
 }
 
 // Risk classes for HITL (File 08 §8.5.1). Defined as event.Risk values so the

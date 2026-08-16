@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/baobao1044/yolo-code/internal/event"
@@ -228,7 +229,9 @@ func TestResumeMarksInterruptedRunningAsPaused(t *testing.T) {
 func TestResumeUnknownSession(t *testing.T) {
 	m, _, _ := newTestManager(t)
 	ctx := context.Background()
-	if _, _, err := m.Resume(ctx, "nope"); err != ErrUnknownSession {
+	// errors.Is, not ==: Resume now wraps every failure that is not a plain
+	// absent record, so a == test would quietly stop matching.
+	if _, _, err := m.Resume(ctx, "nope"); !errors.Is(err, ErrUnknownSession) {
 		t.Errorf("Resume unknown: err = %v, want ErrUnknownSession", err)
 	}
 }

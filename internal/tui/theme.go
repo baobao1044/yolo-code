@@ -68,12 +68,12 @@ func ac(light, dark string) lipgloss.AdaptiveColor {
 // is bold with no explicit foreground — the terminal default. Blue and
 // yellow are avoided (no guaranteed contrast); black/white are avoided.
 func darkTheme() *Theme {
-	cyan := ac("#186f77", "#56c1c1")     // interactive/status indicators
+	cyan := ac("#186f77", "#56c1c1")    // interactive/status indicators
 	magenta := ac("#9d4edd", "#c77dff") // the assistant
 	red := ac("#c01c28", "#ef4146")     // error red
 	green := ac("#1a8f3b", "#3fc26a")   // success green
 	amber := ac("#b3541e", "#e09a3a")   // warning amber
-	gray := ac("#5a5a5a", "#8a8a8a")     // muted/secondary
+	gray := ac("#5a5a5a", "#8a8a8a")    // muted/secondary
 	grayBright := ac("#6a6a6a", "#a0a0a0")
 	sep := ac("#9a9a9a", "#5a5a5a")
 	return &Theme{
@@ -120,7 +120,7 @@ func lightTheme() *Theme {
 		prompt:      lipgloss.NewStyle().Foreground(grayBright),
 		user:        lipgloss.NewStyle().Bold(true),
 		assistant:   lipgloss.NewStyle().Foreground(magenta),
-		thinking:     lipgloss.NewStyle().Foreground(gray),
+		thinking:    lipgloss.NewStyle().Foreground(gray),
 		tool:        lipgloss.NewStyle().Foreground(gray),
 		observation: lipgloss.NewStyle().Foreground(gray),
 		reflection:  lipgloss.NewStyle().Foreground(amber),

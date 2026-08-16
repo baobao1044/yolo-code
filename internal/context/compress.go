@@ -32,13 +32,74 @@ func (e *Engine) compress(ranked []Part) *ContextPackage {
 
 	// Pass 3: greedily keep highest-scored parts until the soft byte budget is
 	// hit; drop the rest. Group the survivors into the package by Kind.
+	//
+	// The walk runs twice. §6.6.1 budgets the groups separately (Budget carries
+	// a Files share and a RAG share), so no group may swallow another's whole
+	// allocation: the first walk offers each Kind present its own highest-ranked
+	// part, the second fills what is left in score order. A single walk let two
+	// files the user happened to leave open consume the entire budget and
+	// evicted every retrieved chunk — the one outcome the RAG group exists to
+	// prevent, and invisible downstream because the group is simply empty.
 	var bytes int
-	for _, p := range deduped {
-		if bytes+len(p.Text) > e.softBudget && bytes > 0 {
-			continue // budget hit; drop the rest
+	kept := make([]bool, len(deduped))
+	headOffered := map[PartKind]bool{}
+
+	// Pass 3, step 0: the system frame is admitted before the walk and is not
+	// charged to it. At SoftBudget 900 the <system> part — 1505 bytes, ranked
+	// 0.05 because a role description shares almost no tokens with any specific
+	// goal — was dropped in full while two 400-byte files of literal "z" were
+	// kept. A run without the system prompt is not a degraded run; it is a
+	// different agent, with no rules, no tool list, and no idea what it is.
+	// §6.7.3's never-trimmed set (system prompt / current user message /
+	// @-referenced files / most recent tool result) says the same thing, and
+	// Layer 5 already honours it — Layer 4 was evicting the part before Layer 5
+	// ever saw it.
+	//
+	// The exemption is exactly one part wide, and that bound is the point. A
+	// blanket Kind-level exemption is the losing option here: it makes the
+	// system group the one place a caller can put unbounded text that no budget
+	// touches, and "the system prompt is protected" would then mean "anything
+	// labelled system is protected", which is how a protection becomes a hole.
+	// So the highest-ranked KindSystem part — the frame the engine itself
+	// authors in gather() — is exempt, and any further system part competes for
+	// the soft budget like anything else. Not charging the frame's bytes is the
+	// other half: the soft budget exists to bound how much *gathered repository
+	// state* is packed in, and the frame is not gathered state. Charging it
+	// would have swapped one silent failure for another, since 1505 bytes
+	// against 900 would leave the budget already spent and empty every other
+	// group instead.
+	for i, p := range deduped {
+		if p.Kind == KindSystem {
+			kept[i] = true
+			headOffered[KindSystem] = true // spends the Kind's head slot
+			break                          // deduped is score-ordered: this is the frame
 		}
-		bytes += len(p.Text)
-		assign(pkg, p)
+	}
+
+	for _, headsOnly := range []bool{true, false} {
+		for i, p := range deduped {
+			if kept[i] {
+				continue
+			}
+			if headsOnly {
+				if headOffered[p.Kind] {
+					continue // this Kind already had its turn
+				}
+				headOffered[p.Kind] = true
+			}
+			if bytes+len(p.Text) > e.softBudget && bytes > 0 {
+				continue // budget hit; this part doesn't fit
+			}
+			bytes += len(p.Text)
+			kept[i] = true
+		}
+	}
+	// Assign in ranked order so each group stays score-sorted regardless of
+	// which walk admitted a part.
+	for i, p := range deduped {
+		if kept[i] {
+			assign(pkg, p)
+		}
 	}
 	return pkg
 }

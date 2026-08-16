@@ -69,10 +69,47 @@ func (b *Bash) Run(ctx context.Context, in ToolInput) (ToolOutput, error) {
 		// Critical commands are explicitly denied (File 08 §8.5.1) — never
 		// spawn them. The dispatcher's HITL gate would deny them anyway, but
 		// Bash refuses directly so a direct Run (outside Dispatch) is safe too.
+		// No snapshot: nothing ran, so there is nothing to have changed.
 		return ToolOutput{ExitCode: -1}, fmt.Errorf("bash: command denied (critical risk): %s", args.Command)
 	}
 
-	name, shellArgs := shellInvocation(args.Command)
+	// Bracket the command with a filesystem walk so the Observation can name
+	// what it changed. Every other writing tool knows its own targets; Bash
+	// hands a string to `sh -c` and cannot, and the empty Files list it used to
+	// return is read downstream as a positive claim that nothing was touched —
+	// which sends a correct `go fmt ./...` to rollback and Reflection with a
+	// "no verification signal" verdict. See fschange.go for the cost and for
+	// why the answer may be "don't know" but must never be a guess.
+	//
+	// The bracket includes the cancellation path: a command killed mid-flight
+	// has still written whatever it wrote before the signal landed, and that is
+	// exactly the state a verifier needs to see.
+	var out ToolOutput
+	var runErr error
+	files, unknown := observeFSChanges(b.watchRoot(), func() {
+		out, runErr = b.spawn(ctx, args.Command)
+	})
+	out.Files, out.FilesUnknown = files, unknown
+	return out, runErr
+}
+
+// watchRoot is the tree the change detector walks: the sandbox's confinement
+// root, not its cwd. A command run from a subdirectory can still write to a
+// sibling (`touch ../x`), and the root is the boundary the rest of the sandbox
+// already enforces. An absent sandbox yields "", which snapshotTree reports as
+// unknown rather than as an empty tree that changed nothing.
+func (b *Bash) watchRoot() string {
+	if b.sandbox == nil {
+		return ""
+	}
+	return b.sandbox.root
+}
+
+// spawn is the process half of Run: classify-free, it just executes command as
+// a process group and collects the result. Split out so the change detector can
+// wrap it without threading a snapshot through every return path.
+func (b *Bash) spawn(ctx context.Context, command string) (ToolOutput, error) {
+	name, shellArgs := shellInvocation(command)
 	cmd := exec.CommandContext(ctx, name, shellArgs...)
 	if b.sandbox != nil {
 		cmd.Dir = b.sandbox.cwd

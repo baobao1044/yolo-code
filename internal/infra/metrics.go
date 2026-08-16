@@ -110,6 +110,12 @@ func (m *Metrics) Counter(name string, lbls labels) int64 {
 
 // Histogram returns the samples recorded for a named histogram under a label
 // set. A never-recorded histogram returns nil.
+//
+// DEAD SEAM, and the starkest of them: this method has no caller anywhere in
+// the module, not even a test. Record writes into m.histograms on every event
+// (see Record above), so every latency distribution the process measures is
+// accumulated in memory and discarded at exit. Counters are read; histograms
+// are not. Pinned in cmd/yolo/deadseam_test.go.
 func (m *Metrics) Histogram(name string, lbls labels) []int64 {
 	k := histogramKey{name: name, labels: encodeLabels(lbls)}
 	m.mu.Lock()

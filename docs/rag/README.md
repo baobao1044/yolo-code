@@ -9,7 +9,7 @@ yolo-code uses RAG to provide relevant context to the LLM, combined with a memor
 ## Contents
 
 - [Context Engine](context-engine.md) — L4 + L5: gather, score, and compile context
-- [Vector Store](vector-store.md) — Pure-Go vector store, chunking, embedding, retrieval
+- [Retrieval Index](vector-store.md) — Pure-Go lexical index, chunking, vectorizing, retrieval
 - [Memory Lifecycle](memory-lifecycle.md) — 6 memory types, event-driven updates, retention
 
 ## Architecture Overview
@@ -32,8 +32,8 @@ yolo-code uses RAG to provide relevant context to the LLM, combined with a memor
                │
     ┌──────────▼──────────┐
     │   Memory System     │  L10
-    │  6 types × vector   │
-    │  store → retrieve    │
+    │  6 types × lexical  │
+    │  index → retrieve   │
     └─────────────────────┘
 ```
 

@@ -23,16 +23,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		s := msg.String()
 
+		// Ctrl+C is the one unconditional escape hatch — it quits whatever owns
+		// the keyboard (typing, help overlay, pending approval). Every other
+		// binding below is conditional; this one must never be.
+		if s == "ctrl+c" {
+			return handleInput(m, msg)
+		}
+
+		// The help overlay is modal: any other key closes it and is consumed
+		// (that's what the overlay itself advertises). It has to be modal now
+		// that '?' is an ordinary character while typing — otherwise the only
+		// way out of the overlay would be /help, which you can't see behind it.
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+
 		// Command keys route to handleInput in BOTH approval and normal mode
 		// (Phase B: the approval trap is gone — ?, scroll, esc, quit all still
 		// work while an approval is pending, only typing is suppressed).
 		switch s {
-		case "enter", "esc", "ctrl+c", "ctrl+p", "ctrl+r", "q", "?", "tab", "pgup", "pgdown":
+		case "enter", "esc", "ctrl+p", "ctrl+r", "tab", "pgup", "pgdown":
+			// Non-printable keys can't be text, so they're unconditional.
 			return handleInput(m, msg)
-		case "y", "n":
-			// During approval y/n approve/reject; outside approval they're
-			// ordinary printable characters → fall through to textinput.
-			if m.approval != nil {
+		case "q", "?", "y", "n":
+			// Printable keys are commands ONLY when nothing is capturing text.
+			// Unguarded, 'q' quit on the first keystroke of "query" (and '?'
+			// popped the help overlay), which made the input box unusable.
+			if !capturingText(m) {
 				return handleInput(m, msg)
 			}
 		}
@@ -71,6 +89,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// capturingText reports whether the input line currently owns the keyboard, in
+// which case a printable keystroke is a character and never a command. The
+// input widget is focused for the whole session, so the only thing that takes
+// the keyboard back is a pending approval — that's the pre-existing y/n rule
+// (§14.8.1), generalised here to every printable binding.
+func capturingText(m Model) bool {
+	return m.approval == nil && m.input.Focused()
 }
 
 // View is pure: a string from the model, no I/O (File 14 §14.11). TUI-001

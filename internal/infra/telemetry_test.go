@@ -12,6 +12,8 @@ package infra
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/baobao1044/yolo-code/internal/event"
@@ -198,4 +200,94 @@ func mkEnv(seq uint64, evt event.Event) event.Envelope {
 // Config into Start).
 func newTelemetryForTest() *Telemetry {
 	return newTelemetry(testConfig())
+}
+
+// TestTelemetrySpansAreRedacted pins the fourth boundary.
+//
+// §13.7.3 names three redaction boundaries — exec output, the log line, the
+// Sentry event — and Infra.project fans every envelope out to four observers.
+// Three of them were covered: logProjector holds a redactor, SentryHub holds a
+// redactor, Metrics only ever reads names and counts. Telemetry was the fourth,
+// and it took eventAttrs(env.Evt) verbatim: the whole event, JSON-decoded, every
+// field. An assistant message that quotes a key, a tool result carrying an
+// env dump, an error whose Msg embeds a token — all of it landed in Span.Attrs
+// and, for error events, in Span.ErrMsg.
+//
+// The stub keeps spans in memory, which is why this was easy to miss: nothing
+// leaves the process today. But Telemetry is documented as the swap point for
+// the real OTel SDK, and the swap does not change Project — it changes where
+// the spans go. A boundary that is only safe because its exporter is a slice is
+// not a boundary.
+func TestTelemetrySpansAreRedacted(t *testing.T) {
+	const secret = "AKIAIOSFODNN7EXAMPLE"
+	tel := newTelemetryForTest()
+
+	tel.Project(context.Background(), mkEnv(1, &event.AssistantMessageEvent{
+		Task: "t_1", Text: "the key is " + secret, Final: true,
+	}))
+	tel.Project(context.Background(), mkEnv(2, &event.ErrorEvent{
+		Task: "t_1", Msg: "auth failed for " + secret,
+	}))
+
+	for _, sp := range tel.Spans() {
+		if s := NewSecrets(); s.WouldLeak(fmt.Sprint(sp.Attrs)) {
+			t.Errorf("span %q attrs carry an unredacted secret: %v", sp.Name, sp.Attrs)
+		}
+		if strings.Contains(sp.ErrMsg, secret) {
+			t.Errorf("span %q ErrMsg carries an unredacted secret: %q", sp.Name, sp.ErrMsg)
+		}
+	}
+}
+
+// TestTelemetryRootErrorIsRedacted covers the other way a string reaches a span.
+// Project's input is an event, so redacting eventAttrs covers it; EndRoot's is
+// an error the runtime hands in directly, and err.Error() goes straight to
+// ErrMsg. A provider auth failure is exactly the error whose text tends to
+// quote the credential it failed with, so the two paths need the same
+// treatment.
+func TestTelemetryRootErrorIsRedacted(t *testing.T) {
+	const secret = "AKIAIOSFODNN7EXAMPLE"
+	tel := newTelemetryForTest()
+
+	tel.StartRoot(context.Background(), "t_1")
+	tel.EndRoot("t_1", errString("provider rejected "+secret))
+
+	sp := tel.EndedRoots()["t_1"]
+	if sp == nil {
+		t.Fatal("EndRoot recorded no ended root")
+	}
+	if strings.Contains(sp.ErrMsg, secret) {
+		t.Errorf("root span ErrMsg carries an unredacted secret: %q", sp.ErrMsg)
+	}
+}
+
+// TestErrorSpanCarriesItsMessage pins a defect the redaction work above
+// surfaced: an error span's ErrMsg was always empty.
+//
+// Project sets the status from isErrorEvent, then reaches for the text:
+//
+//	if m, ok := sp.Attrs["msg"]; ok { ... }
+//
+// but eventAttrs has already run every JSON key through attrKey, and attrKey
+// maps "msg" → "error.msg" (§13.3.3 stable trace attribute). So the lookup
+// misses on every error event ever projected, and the span goes out marked
+// Error with nothing saying what the error was. The attribute itself was
+// always there under the renamed key, which is why nothing noticed: a
+// collector querying error.msg sees the text, and only the span's own status
+// message is blank.
+func TestErrorSpanCarriesItsMessage(t *testing.T) {
+	tel := newTelemetryForTest()
+	tel.Project(context.Background(), mkEnv(1, &event.ErrorEvent{Task: "t_1", Msg: "disk full"}))
+
+	spans := tel.Spans()
+	if len(spans) != 1 {
+		t.Fatalf("got %d spans, want 1", len(spans))
+	}
+	if spans[0].Status != SpanStatusError {
+		t.Errorf("status = %q, want %q", spans[0].Status, SpanStatusError)
+	}
+	if spans[0].ErrMsg != "disk full" {
+		t.Errorf("ErrMsg = %q, want %q — the lookup key is the pre-rename JSON name, "+
+			"so an error span reports a failure with no message", spans[0].ErrMsg, "disk full")
+	}
 }

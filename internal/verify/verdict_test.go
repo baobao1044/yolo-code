@@ -61,22 +61,6 @@ func (e *busEnv) collect(n int) (stage []*event.VerificationStageEvent, fail []*
 	return
 }
 
-// collectAll drains until the channel goes quiet for `quiet` with no new event,
-// then returns everything seen. Used when the count isn't known up front.
-func (e *busEnv) collectAll(quiet time.Duration) (stage []*event.VerificationStageEvent, fail []*event.VerificationFailedEvent) {
-	for {
-		select {
-		case env, ok := <-e.ch:
-			if !ok {
-				return
-			}
-			stage, fail = appendEnv(env, stage, fail)
-		case <-time.After(quiet):
-			return
-		}
-	}
-}
-
 func appendEnv(env event.Envelope, stage []*event.VerificationStageEvent, fail []*event.VerificationFailedEvent) ([]*event.VerificationStageEvent, []*event.VerificationFailedEvent) {
 	switch ev := env.Evt.(type) {
 	case *event.VerificationStageEvent:
@@ -262,5 +246,120 @@ func TestVerifyNilBusStillReturnsVerdict(t *testing.T) {
 	v := e.Verify(context.Background(), Change{Task: "t_5", Files: []string{"a.go"}}, fullPolicy())
 	if !v.Pass {
 		t.Fatalf("Verdict.Pass = false with nil bus, want true: %+v", v)
+	}
+}
+
+// --- an empty change cannot certify itself ----------------------------------
+
+func TestVerifyEmptyChangeCannotPass(t *testing.T) {
+	// The differential: same engine wiring, same repo state, same policy — only
+	// Change.Files differs. A real broken file fails. An empty file list used to
+	// PASS: the AST stage looped over zero files and reported "ast valid", the
+	// five command stages found no file in a language they have a tool for and
+	// skipped, the Policy stage found no violations in nothing, and Verify fell
+	// through to Pass=true having executed zero commands.
+	//
+	// The verdict alone can't show the bug — a pass looks like a pass. The
+	// command count is the proof: a run that shelled out to nothing has not
+	// verified anything.
+	fs := fakeFS{"broken.go": "package main\n\nfunc a() {\n"} // missing close brace
+
+	rBroken := passRunner()
+	vBroken := NewEngine(Deps{Runner: rBroken, FS: fs}).
+		Verify(context.Background(), Change{Task: "t_broken", Files: []string{"broken.go"}}, fullPolicy())
+
+	rEmpty := passRunner()
+	vEmpty := NewEngine(Deps{Runner: rEmpty, FS: fs}).
+		Verify(context.Background(), Change{Task: "t_empty", Files: nil}, fullPolicy())
+
+	if vBroken.Pass {
+		t.Fatalf("broken.go passed verification: %+v", vBroken)
+	}
+	if len(rEmpty.calls) != 0 {
+		t.Fatalf("the empty change ran %d commands, want 0 (premise of this test)", len(rEmpty.calls))
+	}
+	if vEmpty.Pass {
+		t.Fatalf("an empty Change PASSED having executed 0 commands: %+v", vEmpty)
+	}
+	if vEmpty.Severity != SevFail {
+		t.Errorf("empty-change Severity = %s, want fail", vEmpty.Severity)
+	}
+	if !strings.Contains(vEmpty.Reason, "no verification signal") {
+		t.Errorf("Reason = %q, want it to say the run measured nothing", vEmpty.Reason)
+	}
+	if len(vEmpty.Errors) == 0 {
+		t.Error("Errors empty; Reflection gets nothing to reason about")
+	}
+}
+
+func TestVerifyEmptyChangePublishesFailure(t *testing.T) {
+	// A no-signal run takes the same fail path as any other: verification.failed
+	// so the runtime rolls back and Reflection sees it, and one skip advisory
+	// per required stage so the trace shows *why* nothing ran.
+	bus := newBusEnv()
+	defer bus.bus.Close()
+	e := NewEngine(Deps{Runner: passRunner(), FS: fakeFS{}, Bus: bus.bus})
+
+	v := e.Verify(context.Background(), Change{Task: "t_nosig"}, fullPolicy())
+
+	if v.Pass {
+		t.Fatalf("Verdict = %+v, want fail", v)
+	}
+	stage, fail := bus.collect(8) // 7 stage advisories + 1 verification.failed
+	if len(fail) != 1 {
+		t.Fatalf("verification.failed events = %d, want 1", len(fail))
+	}
+	if string(fail[0].Task) != "t_nosig" {
+		t.Errorf("failed event Task = %q, want t_nosig", fail[0].Task)
+	}
+	for _, s := range stage {
+		if s.Status != "skip" {
+			t.Errorf("stage %q status = %q, want skip (nothing to measure)", s.Stage, s.Status)
+		}
+	}
+}
+
+func TestVerifyEmptyChangeFailsUnderEveryPolicy(t *testing.T) {
+	// Not just the full policy: a lighter policy requires fewer stages, but it
+	// still requires *something* (Required always ends with the project gate),
+	// and none of them can measure a change that lists no files.
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	for name, pol := range map[string]Policy{
+		"full":    fullPolicy(),
+		"ast":     {RequireAST: true},
+		"nothing": {},
+	} {
+		e := NewEngine(Deps{Runner: passRunner(), FS: fs})
+		if v := e.Verify(context.Background(), Change{Task: "t_" + name}, pol); v.Pass {
+			t.Errorf("policy %q passed an empty change: %+v", name, v)
+		}
+	}
+}
+
+func TestVerifyKeepsPassingWhenSomeStagesLegitimatelySkip(t *testing.T) {
+	// The no-signal rule must not turn every skip into a failure. These are the
+	// shapes that skip for a good reason and still carry a real measurement, so
+	// they must keep passing:
+	//   - a Markdown-only patch: no Go tool for any command stage, but AST and
+	//     Policy still read the file (this is what skip_test.go covers end to
+	//     end; asserted here so the rule's boundary is stated in one place);
+	//   - a light policy: only AST is required, the rest aren't planned at all.
+	fs := fakeFS{
+		"b.md": "# title\n",
+		"a.go": "package main\n\nfunc a() {}\n",
+	}
+	cases := map[string]struct {
+		files []string
+		pol   Policy
+	}{
+		"markdown only, full policy": {[]string{"b.md"}, fullPolicy()},
+		"go file, AST-only policy":   {[]string{"a.go"}, Policy{RequireAST: true}},
+		"markdown only, AST-only":    {[]string{"b.md"}, Policy{RequireAST: true}},
+	}
+	for name, tc := range cases {
+		e := NewEngine(Deps{Runner: passRunner(), FS: fs})
+		if v := e.Verify(context.Background(), Change{Task: "t_ok", Files: tc.files}, tc.pol); !v.Pass {
+			t.Errorf("%s: Verdict = %+v, want pass (this skip is legitimate)", name, v)
+		}
 	}
 }

@@ -1,6 +1,10 @@
 package context
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 // TestCompressDeduplicatesSameFileKeepsHighestScored pins pass 1: two parts
 // over the same file source collapse to one, and the survivor is the
@@ -148,5 +152,104 @@ func TestCompressPreservesScoreOrderWithinGroup(t *testing.T) {
 	}
 	if pkg.Files[0].Source != "high.go" || pkg.Files[1].Source != "mid.go" || pkg.Files[2].Source != "low.go" {
 		t.Errorf("group order = %v, want [high.go mid.go low.go] (descending score preserved)", []string{pkg.Files[0].Source, pkg.Files[1].Source, pkg.Files[2].Source})
+	}
+}
+
+// TestCompressKeepsASecondChunkOverASecondStaleFile is the selection-level
+// consequence of the cosine rescale — the half that matters, because a score
+// that moves while the evicted set stays identical has fixed nothing.
+//
+// Three open files, freshly written, 400 bytes of "z" each: no goal token, no
+// directory relation, 0.30 apiece on recency. Two retrieved chunks at cosines
+// the real embedder produces. The soft budget fits one head from each Kind plus
+// exactly one more part, so the ranking decides which.
+//
+// Before: files at 0.30 took 1st/2nd/3rd, so the spare slot went to a second
+// content-free file and the second chunk was evicted. After: the normalised
+// chunks take 1st/2nd and the spare slot goes to the second chunk.
+func TestCompressKeepsASecondChunkOverASecondStaleFile(t *testing.T) {
+	eng := New(Deps{SoftBudget: 900})
+	req := rankReq("fix the Login function so bad passwords are rejected")
+	now := time.Now()
+	noise := strings.Repeat("z", 400)
+	chunk := strings.Repeat("q", 100)
+	parts := []Part{
+		{Kind: KindFile, Source: "docs/a.md", Text: noise, Recency: now},
+		{Kind: KindFile, Source: "docs/b.md", Text: noise, Recency: now},
+		{Kind: KindFile, Source: "docs/c.md", Text: noise, Recency: now},
+		{Kind: KindRAG, Source: "auth/login.go#1", Score: 0.1529, Text: chunk},
+		{Kind: KindRAG, Source: "auth/login.go#2", Score: 0.1400, Text: chunk},
+	}
+
+	pkg := eng.compress(eng.rank(parts, req))
+	if len(pkg.RAG) != 2 || len(pkg.Files) != 1 {
+		got := make([]string, 0, len(pkg.Files)+len(pkg.RAG))
+		for _, p := range pkg.Files {
+			got = append(got, "file "+p.Source)
+		}
+		for _, p := range pkg.RAG {
+			got = append(got, "rag "+p.Source)
+		}
+		t.Errorf("kept %v; want both retrieved chunks and one file. The last slot in the "+
+			"budget must go to the second chunk from the store, not to a third file of "+
+			"literal \"z\" that happens to be recent", got)
+	}
+}
+
+// TestCompressNeverEvictsTheSystemFrame: at SoftBudget 900 the <system> part —
+// 1505 bytes, ranked 0.05 because a role description shares almost no tokens
+// with any particular goal — was dropped in full, while a 500-byte file was
+// kept. The system prompt is what tells the model what it is, what the rules
+// are and what tools exist; a run without it is a different agent, not a
+// degraded one. §6.7.3 puts it in the never-trimmed set and Layer 5 honours
+// that, but Layer 4 was evicting it before Layer 5 ever saw the package.
+func TestCompressNeverEvictsTheSystemFrame(t *testing.T) {
+	eng := New(Deps{SoftBudget: 900})
+	ranked := []Part{ // already in score order, as rank() would leave them
+		{Kind: KindFile, Source: "docs/a.md", Text: strings.Repeat("z", 500), Score: 0.30},
+		{Kind: KindFile, Source: "docs/b.md", Text: strings.Repeat("z", 500), Score: 0.30},
+		{Kind: KindSystem, Source: "<system>", Text: strings.Repeat("s", 1505), Score: 0.05},
+	}
+	pkg := eng.compress(ranked)
+	if len(pkg.System) != 1 {
+		t.Errorf("pkg.System = %d parts, want 1: the system frame outranks the byte budget", len(pkg.System))
+	}
+	// The exemption must not be paid for by everything else: the frame's bytes
+	// are not charged, so the gathered context still gets the whole budget.
+	if len(pkg.Files) == 0 {
+		t.Error("pkg.Files empty: exempting the system frame must not spend the budget " +
+			"the soft budget exists to allocate to gathered repository state")
+	}
+}
+
+// TestCompressExemptsExactlyOneSystemPart bounds the exemption, which is the
+// argument against the option not taken. A blanket Kind-level exemption would
+// make <system> the one label under which unbounded text escapes every budget,
+// and "the system prompt is protected" would come to mean "anything tagged
+// system is protected" — a protection that has become a hole.
+//
+// So: the highest-ranked system part (the frame gather() authors) is exempt and
+// uncharged; a second one competes like any other part and loses here, because
+// 1000 bytes do not fit in what is left of 500. The file is the tell that the
+// frame was not charged — before the exemption the frame consumed the budget as
+// the first part admitted and the file was evicted instead.
+func TestCompressExemptsExactlyOneSystemPart(t *testing.T) {
+	eng := New(Deps{SoftBudget: 500})
+	ranked := []Part{
+		{Kind: KindSystem, Source: "<system>", Text: strings.Repeat("s", 1000), Score: 0.05},
+		{Kind: KindFile, Source: "docs/a.md", Text: strings.Repeat("z", 100), Score: 0.04},
+		{Kind: KindSystem, Source: "<injected>", Text: strings.Repeat("x", 1000), Score: 0.03},
+	}
+	pkg := eng.compress(ranked)
+	if len(pkg.System) != 1 {
+		t.Errorf("pkg.System = %d parts, want exactly 1: only the frame is exempt, a second "+
+			"system part is budgeted like anything else", len(pkg.System))
+	}
+	if len(pkg.System) > 0 && pkg.System[0].Source != "<system>" {
+		t.Errorf("pkg.System[0] = %q, want the highest-ranked system part", pkg.System[0].Source)
+	}
+	if len(pkg.Files) != 1 {
+		t.Errorf("pkg.Files = %d parts, want 1: the exempt frame's 1000 bytes must not be "+
+			"charged against the 500-byte budget the file needs 100 of", len(pkg.Files))
 	}
 }

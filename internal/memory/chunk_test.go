@@ -76,7 +76,7 @@ func TestReindexRefreshesEditedFunctionChunks(t *testing.T) {
 	fs := memFS{
 		"a.go": []byte("package main\n\nfunc Old() int { return 1 }\n"),
 	}
-	s := NewSemanticStoreWithFS(NewHashEmbedder(256), fs)
+	s := NewLexicalStoreWithFS(NewHashEmbedder(256), fs)
 	ctx := context.Background()
 	// Initial index: one chunk for Old().
 	s.Reindex(ctx, "a.go", nil) // nil content → read via FS
@@ -106,7 +106,7 @@ func TestListenerReindexesOnPatchApplied(t *testing.T) {
 		"a.go": []byte("package main\n\nfunc Hello() string { return \"hi\" }\n"),
 	}
 	emb := NewHashEmbedder(256)
-	store := NewSemanticStoreWithFS(emb, fs)
+	store := NewLexicalStoreWithFS(emb, fs)
 	// Wire the store as the knowledge store with its FS so the listener can
 	// reindex. (Test uses the real listener path: patch.applied → Reindex.)
 	s, err := Open(Deps{Root: t.TempDir(), Bus: event.New()})

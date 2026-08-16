@@ -39,6 +39,19 @@ type EventPublisher interface {
 // completion. Sprint 10 uses a fake runner that publishes canned events; the
 // real per-agent drive (cognitive core + exec engine + scoped tools against a
 // live repo) is the integration sprint (Decision 1).
+//
+// Threading contract. Run is always called from a goroutine the orchestrator
+// owns, never from the event loop, and never after Orchestrator.Run returns —
+// Run waits for every inflight turn before returning, so a caller may tear the
+// runner down (close a shadow tree, flush a store) once it does. With
+// Config.Concurrency == 1 the turns are also serialized, so a runner may hold
+// unsynchronised state. ABOVE 1 they overlap, and the runner must be
+// goroutine-safe: shared session managers, memory stores, and patch/shadow
+// trees are the usual casualties.
+//
+// The ctx carries the turn's own deadline (Config.AgentTimeout /
+// RoleTimeouts) and is cancelled when the plan ends. A runner that ignores it
+// cannot be interrupted, and Orchestrator.Run will wait for it.
 type AgentRunner interface {
 	Run(ctx context.Context, role Role, task event.TaskAssignEvent) error
 }

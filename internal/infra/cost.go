@@ -87,7 +87,16 @@ func (c *Cost) NewTask(id event.TaskID) {
 		return
 	}
 	c.known[id] = struct{}{}
-	c.deadlines[id] = time.Now().Add(c.deadline)
+	// A deadline of zero means "no wall-clock cap", not "expires now". Adding it
+	// blindly stamps time.Now(), and every reader comparing against it sees the
+	// task as expired the instant it registers — under infra.Config{}, which
+	// startWithLog documents as supported, CheckBeforeDispatch would refuse the
+	// first dispatch of every task. cognitive.Cost had exactly this bug (see the
+	// post-mortem on its RegisterTask); this is its unfixed twin, guarded here
+	// so the dead seam above cannot arm it if someone does wire it later.
+	if c.deadline > 0 {
+		c.deadlines[id] = time.Now().Add(c.deadline)
+	}
 	c.mu.Unlock()
 	if c.ledger != nil {
 		c.ledger.RegisterTask(id)
@@ -100,9 +109,26 @@ func (c *Cost) NewTask(id event.TaskID) {
 // the ledger: the cognitive controller auto-creates an entry on read (cost.go
 // task()), and a pure snapshot must not trigger that side effect.
 //
-// tokens is a documented spec gap (§13.10.1): cognitive.Cost has no public token
-// accessor (tokensIn/tokensOut are unexported); the field returns 0 until L6
-// exposes a read path. Not exit-bar-testable — the exit bar checks dollars/loops.
+// DEAD SEAM — read this before wiring anything into it. No type in the tree
+// implements infra.CostLedger, the only construction is NewCost(cfg, nil) at
+// infra.go:121, and nothing outside this package ever reads Infra.Cost. So
+// c.ledger is always nil in production and the dollars/loops below are
+// structurally zero, not measured. The one would-be consumer, coord.Budget
+// (coord/cost.go:64), discards dollars, loops and tokens and reads only the
+// deadline — it is a timeout wearing the word "budget".
+//
+// Do not animate this chain by supplying a ledger. cognitive.Cost.Dollars is
+// tokens × FixedPricer, and the pricer is 0 unless the operator sets
+// YOLO_COST_PER_TOKEN — so a run that burned real tokens at an unknown price
+// reports $0.00 here, with no priced-ness bit to distinguish it from a run that
+// spent nothing. UsageKnown stops at AddTokens' door. Carrying the distinction
+// this far needs a signature change across four packages, to serve a consumer
+// that throws the number away. The honest options are to delete this seam or to
+// leave it visibly dead; reporting an unmeasured zero as a budget is the exact
+// defect the surrounding cleanup removed elsewhere.
+//
+// tokens is likewise structurally 0: cognitive.Cost has no public token
+// accessor (tokensIn/tokensOut are unexported).
 func (c *Cost) Snapshot(id event.TaskID) (dollars float64, loops, tokens int, deadline time.Time, ok bool) {
 	c.mu.Lock()
 	if _, known := c.known[id]; !known {

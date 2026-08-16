@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 )
 
 // Chunk is one retrievable unit (§11.7.2): the path it came from, the kind
@@ -60,7 +61,7 @@ func chunkGo(path string, content []byte) []Chunk {
 		start := fset.Position(fd.Pos()).Offset
 		// Include the preceding comment as context (§11.7.2: "the preceding
 		// docstring/signature as context").
-		if c := precedingComment(f, fd); c != nil {
+		if c := docComment(fd); c != nil {
 			if cs := fset.Position(c.Pos()).Offset; cs < start {
 				start = cs
 			}
@@ -76,21 +77,19 @@ func chunkGo(path string, content []byte) []Chunk {
 	return out
 }
 
-// precedingComment returns the comment immediately preceding the function (the
-// doc comment), if any. Walks the file's comment groups for one whose end is
-// adjacent to the function's start.
-func precedingComment(f *ast.File, fd *ast.FuncDecl) *ast.CommentGroup {
-	for _, cg := range f.Comments {
-		if cg.End() >= fd.Pos() {
-			continue // comment is at/after the func — not preceding
-		}
-		// The comment group immediately before the func (the closest preceding).
-		// ast ordering: comment groups precede the decl they document.
-		if cg.End()+1 <= fd.Pos() { // heuristic adjacency
-			return cg
-		}
-	}
-	return nil
+// docComment returns the function's own doc comment, if any — the group
+// parser.ParseComments already attached as fd.Doc (it only attaches a group
+// that ends on the line immediately above the decl, which is exactly the
+// adjacency §11.7.2 wants).
+//
+// This replaced a scan over f.Comments that returned the FIRST group ending
+// before the func. Comment groups are position-ordered, so for every function
+// but the first that was the package comment at the top of the file: chunk i
+// then spanned [top of file, end of func i]. Total chunk text — and the
+// embedding work over it — grew O(n^2) in file size, and each chunk matched
+// every query its whole file matched. fd.Doc is O(1) and correct.
+func docComment(fd *ast.FuncDecl) *ast.CommentGroup {
+	return fd.Doc
 }
 
 // funcName returns the function's name (the receiver is dropped for
@@ -155,14 +154,22 @@ func splitLines(s string) []string {
 	return out
 }
 
-// joinLines joins lines with newlines.
+// joinLines joins lines with newlines. Built through a strings.Builder sized
+// up front: `out += l` reallocated and recopied the whole prefix on every line,
+// which is O(bytes^2) per window and shows up on doc/markdown files (they take
+// the fixedWindow path for their entire length).
 func joinLines(lines []string) string {
-	out := ""
+	n := 0
+	for _, l := range lines {
+		n += len(l) + 1
+	}
+	var b strings.Builder
+	b.Grow(n)
 	for i, l := range lines {
 		if i > 0 {
-			out += "\n"
+			b.WriteByte('\n')
 		}
-		out += l
+		b.WriteString(l)
 	}
-	return out
+	return b.String()
 }

@@ -45,7 +45,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 | Sprint | Name | Status | Key Deliverables | Notes |
 |---|---|---|---|---|
 | S12 | Multi-Agent Integration | 🔵 | Coordination layer, DAG scheduler, orchestrator/coder/reviewer | Integrating |
-| S13 | Superpowers | ✅ | RAG, vector store, memory lifecycle, knowledge accumulation | Wired into agent path |
+| S13 | Superpowers | ✅ | RAG, lexical retrieval index, memory lifecycle, knowledge accumulation | Wired into agent path |
 | S14 | Scope Loop & Dynamic Workflow | ✅ | `internal/scope` (controller, W2/W3, MCTS) + `internal/workflow` (bugfix/feature/refactor), runtime ports, adapters, multi-candidate reflection | Landed |
 
 ## Sprint Details
@@ -67,7 +67,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 
 ### S4 — Context Assembly
 - Context Engine: 7 input sources
-- Relevance scoring: recency, proximity, semantic, centrality, explicit
+- Relevance scoring: recency, proximity, similarity (token overlap), centrality (stubbed to 0), explicit
 - Compression passes when exceeding budget
 
 ### S5 — Prompt Pipeline
@@ -115,7 +115,7 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 - Shared cost budget
 
 ### S13 — Superpowers
-- Pure-Go vector store (brute-force cosine, dim 384 default; Embedder interface for swap)
+- Pure-Go lexical retrieval index (linear scan + cosine over hashed term-frequency vectors, dim 384 default; `Embedder` interface is the seam for a real embedding model — none is wired)
 - Per-function chunking (go/parser) + fixed-window fallback for non-Go
 - Cold-start repo indexing (IndexRepo walk, skip vendored/cache/oversized, deterministic)
 - RAG retrieval flow wired into Context Engine (KindRAG group, `<rag>` prompt tag, budget slot)
@@ -123,8 +123,8 @@ Detailed progress by sprint, updated per `15-Implementation_Roadmap.md`.
 - Knowledge insight store (distinct from code-chunk RAG) + cross-session persistence
 - Working memory task/state + clear-on-completed
 - Exec history rolling window (last 50) with monotonic seq
-- VectorStore Delete/Size/Evict (LRU)/SetThreshold
-- Composition root wires memory.Open + SemanticStore+FS into headless/coord/TUI paths
+- LexicalStore Delete/Size/Evict (LRU)/SetThreshold
+- Composition root wires memory.Open + LexicalStore+FS into headless/coord/TUI paths
 - Determinism preserved: memory.update telemetry excluded from headless projection; seq normalized
 
 ### S14 — Scope Loop & Dynamic Workflow

@@ -12,7 +12,7 @@ import (
 )
 
 // simple fallback on startup before the first resize arrives.
-const welcomeMsg = "yolo — awaiting task (press q or ctrl+c to quit)"
+const welcomeMsg = "yolo — awaiting task (press ctrl+c to quit)"
 
 // Layout constants in terminal cells.
 const (
@@ -102,7 +102,11 @@ func spinnerGlyph(m Model) string {
 	switch m.state {
 	case "DONE":
 		return theme.success.Render("✔")
-	case "CANCELLED":
+	case "CANCELLED", "FAILED":
+		// FAILED is the plan.done(Done:false) label — a run that ended without
+		// completing. It gets the same terminal ✘ as a cancellation and, like
+		// it, must never fall through to the spinner: a finished run whose
+		// header keeps animating reads as still working.
 		return theme.errorStyle.Render("✘")
 	}
 	if m.streaming || m.activeTool != "" {
@@ -129,7 +133,11 @@ func bannerView(m Model) string {
 	if len(parts) == 0 {
 		return strings.Repeat(" ", m.width)
 	}
-	line := strings.Join(parts, " · ")
+	// The banner is one line, and every part is free text from an event — an
+	// error message, a cancel reason, a cost-abort reason, a plan summary. A
+	// wrapped multi-line error would otherwise grow the banner and shrink the
+	// body under it by however many lines the message happened to have.
+	line := singleLine(strings.Join(parts, " · "))
 	style := theme.banner
 	if m.banner != "" {
 		style = theme.errorStyle
@@ -171,7 +179,8 @@ func statusView(m Model) string {
 	if m.state == "PAUSED" {
 		hints = append(hints, statusHint{"paused — ctrl+r to resume", 4})
 	} else {
-		hints = append(hints, statusHint{"q quit · esc cancel · ctrl+p pause · ? help", 5})
+		// ctrl+c, not q: q is a character while the input has the keyboard.
+		hints = append(hints, statusHint{"ctrl+c quit · esc cancel · ctrl+p pause · /help", 5})
 	}
 	// P2: nice-to-have.
 	if m.approval == nil && m.state != "PAUSED" {
@@ -293,6 +302,18 @@ func chatView(m Model, w, h int) string {
 		case "assistant":
 			prefix = theme.assistant.Render("│ ")
 			text = theme.assistant.Render(text)
+		case "partial":
+			// A streamed answer the runtime never finished — settleStream
+			// commits it when a task ends badly so the text the user watched
+			// arrive isn't deleted on the way to reporting the failure.
+			//
+			// The assistant's own colour, because that is who wrote it, but a
+			// broken gutter instead of the solid one and an explicit trailing
+			// mark: without them this is indistinguishable from a complete
+			// reply, and a truncated answer read as final is worse than no
+			// answer at all.
+			prefix = theme.assistant.Render("╎ ")
+			text = theme.assistant.Render(text) + theme.muted.Render("  ⋯ interrupted")
 		case "tool":
 			prefix = theme.tool.Render("  ▸ ")
 		case "observation":
@@ -333,7 +354,7 @@ func chatView(m Model, w, h int) string {
 
 // emptyStateView renders the onboarding welcome panel (Phase C) shown in the
 // chat pane before the first task. It names the agent, lists three example
-// prompts a new user can copy, and points to ? for help + "type a goal + Enter".
+// prompts a new user can copy, and points to /help + "type a goal + Enter".
 // Keeping it text-only (no glyph that depends on a Nerd Font) keeps the first
 // impression legible across terminals.
 func emptyStateView(m Model, w, h int) string {
@@ -349,7 +370,7 @@ func emptyStateView(m Model, w, h int) string {
 	for _, ex := range examples {
 		_, _ = fmt.Fprintf(&b, "%s\n", theme.user.Render(ex))
 	}
-	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.muted.Render("press ? for key bindings · q or ctrl+c to quit"))
+	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.muted.Render("type /help for key bindings · ctrl+c to quit"))
 	content := strings.TrimRight(b.String(), "\n")
 	wrapped := lipgloss.NewStyle().Width(w).Render(content)
 	return truncateHeight(wrapped, h)
@@ -381,10 +402,14 @@ func railView(m Model, w, h int) string {
 	if m.approval != nil {
 		_, _ = fmt.Fprintln(&b, theme.warning.Render("Approval required"))
 		if m.approval.tool != "" {
-			_, _ = fmt.Fprintf(&b, "tool: %s\n", m.approval.tool)
+			_, _ = fmt.Fprintf(&b, "tool: %s\n", singleLine(m.approval.tool))
 		}
 		if m.approval.summary != "" {
-			_, _ = fmt.Fprintf(&b, "%s\n", m.approval.summary)
+			// One labelled line each — same rule as the board row: free text
+			// from the event, so collapse before it reaches a one-line region.
+			// (preview below is deliberately left as a block: it is a multi-line
+			// excerpt by design, and the rail truncates it by height.)
+			_, _ = fmt.Fprintf(&b, "%s\n", singleLine(m.approval.summary))
 		}
 		if m.approval.risk != "" {
 			riskStyle := theme.warning
@@ -394,23 +419,29 @@ func railView(m Model, w, h int) string {
 			_, _ = fmt.Fprintf(&b, "risk: %s\n", riskStyle.Render(m.approval.risk))
 		}
 		if m.approval.preview != "" {
-			preview := m.approval.preview
-			if len(preview) > 120 {
-				preview = preview[:119] + "…"
-			}
-			_, _ = fmt.Fprintf(&b, "%s\n", theme.muted.Render(preview))
+			// truncateRunes, not a byte slice: a preview cut mid-rune renders as
+			// a replacement character in the middle of the user's own text.
+			_, _ = fmt.Fprintf(&b, "%s\n", theme.muted.Render(truncateRunes(m.approval.preview, 120)))
 		}
 		_, _ = fmt.Fprintln(&b, "y: approve · n: reject")
 	}
 
 	if m.cost.aborted {
 		_, _ = fmt.Fprintf(&b, "%s %s\n", theme.errorStyle.Render("cost aborted"), m.cost.abortReason)
-	} else if m.cost.dollars > 0 || m.cost.tokensEst > 0 {
-		// Phase D: the rail shows accumulated spend + a rough token estimate
-		// (dollars exact from cost.incurred; tokensEst ≈ len(token delta)/4 —
-		// the provider doesn't parse usage on the live path). The ~ prefix
-		// marks the estimate as rough.
-		_, _ = fmt.Fprintf(&b, "cost: $%.2f · ~%d tok\n", m.cost.dollars, m.cost.tokensEst)
+	} else if m.cost.calls > 0 || m.cost.tokenChars > 0 {
+		// Lead with the call count: it is the only measured number here.
+		// tokensEst() ≈ accumulated token-delta chars / 4 because no event
+		// delivers the real counts to this layer, and dollars is 0 unless the
+		// operator set YOLO_COST_RATES — so money is shown only when they asked
+		// for it, and labelled with whose rates it came from. A "$0.00" here
+		// would read as a measurement of zero spend rather than the absence of a
+		// price list, and a "~0 tok" after a full answer (which is what
+		// truncating each delta produced) is the same false measurement.
+		_, _ = fmt.Fprintf(&b, "cost: %d tool calls · ~%d tok", m.cost.calls, m.cost.tokensEst())
+		if m.cost.dollars > 0 {
+			_, _ = fmt.Fprintf(&b, " · ~$%.2f (your rates)", m.cost.dollars)
+		}
+		_, _ = fmt.Fprintln(&b)
 		if m.cost.level != "" {
 			_, _ = fmt.Fprintf(&b, "level: %s\n", m.cost.level)
 		}
@@ -421,7 +452,7 @@ func railView(m Model, w, h int) string {
 	if m.focus == paneDiff && m.diff != nil {
 		_, _ = fmt.Fprintln(&b, "Diff viewer")
 		if m.diff.reason != "" {
-			_, _ = fmt.Fprintf(&b, "%s\n", theme.errorStyle.Render(m.diff.reason))
+			_, _ = fmt.Fprintf(&b, "%s\n", theme.errorStyle.Render(singleLine(m.diff.reason)))
 		}
 		for _, f := range m.diff.files {
 			suffix := ""
@@ -458,11 +489,11 @@ func railView(m Model, w, h int) string {
 			status := statusDot(td.status)
 			line := fmt.Sprintf("%s %s · %s", status, td.agent, td.status)
 			if td.brief != "" {
-				brief := td.brief
-				if len(brief) > 40 {
-					brief = brief[:39] + "…"
-				}
-				line += " — " + brief
+				// The brief is free text from coord, and a rework brief embeds
+				// "\n\nReviewer comments:\n…" (or "\n\nTest output:\n…"). Rendered
+				// raw it broke the row across several rail lines and pushed the
+				// rest of the board down; collapsed, the row stays one row.
+				line += " — " + truncateRunes(singleLine(td.brief), 40)
 			}
 			_, _ = fmt.Fprintf(&b, "%s\n", line)
 		}
@@ -498,13 +529,13 @@ func statusDot(status string) string {
 // and help still work while an approval is pending (Phase B non-trapping).
 func helpView(m Model) string {
 	var b strings.Builder
-	_, _ = fmt.Fprintf(&b, "%s\n\n", theme.header.Render("yolo — key bindings"))
+	_, _ = fmt.Fprintf(&b, "%s\n\n", theme.header.Render("yolo — keys and commands"))
 
 	// Navigation.
 	_, _ = fmt.Fprintf(&b, "%s\n", theme.state.Render("Navigation"))
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "Tab", "switch focus: chat → diff → board")
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "PgUp / PgDn", "scroll chat up / down")
-	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "?", "toggle this help")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/help or ?", "toggle this help")
 
 	// Task control.
 	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.state.Render("Task control"))
@@ -512,12 +543,26 @@ func helpView(m Model) string {
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "Esc", "cancel current task")
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "Ctrl+P", "pause task")
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "Ctrl+R", "resume paused task")
-	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "q / Ctrl+C", "quit")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "Ctrl+C", "quit")
+
+	// Commands. The overlay called itself "key bindings" and listed only keys,
+	// so every slash command the TUI accepts was undiscoverable — /theme and
+	// /provider had shipped with no surface that mentions them. A command the
+	// user cannot find is close to a command that does not exist.
+	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.state.Render("Commands"))
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/clear", "clear the chat pane")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/theme [name]", "dark light contrast mono (no name lists them)")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/model <name>", "swap the model")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/provider <p>", "swap the provider preset")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/status", "provider, model and session status")
+	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "/pref [k [v]]", "remember a preference; no args lists them")
+	_, _ = fmt.Fprintf(&b, "%s\n", theme.muted.Render("  preferences are per-user and cross-project — the agent reads them every turn"))
 
 	// Approval.
 	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.state.Render("Approval"))
 	_, _ = fmt.Fprintf(&b, "  %-14s %s\n", "y / n", "approve / reject (when approval pending)")
 	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.muted.Render("scroll, help, esc and quit still work while an approval is pending"))
+	_, _ = fmt.Fprintf(&b, "%s\n", theme.muted.Render("q, ?, y and n are plain characters while you're typing — only Ctrl+C always quits"))
 
 	_, _ = fmt.Fprintf(&b, "\n%s\n", theme.muted.Render("press any key to close"))
 	body := b.String()
@@ -544,6 +589,31 @@ func truncateHeight(text string, h int) string {
 		return text
 	}
 	return strings.Join(lines[len(lines)-h:], "\n")
+}
+
+// singleLine collapses a free-text field so it can be rendered in a region
+// that is one line tall (a board row, the banner, a labelled rail line).
+// Newlines, tabs and carriage returns become single spaces and runs of spaces
+// collapse, so an embedded block ("brief\n\nReviewer comments:\nredo") reads as
+// one sentence instead of splitting the row and pushing everything below it
+// down. Callers that render a deliberate block (the diff hunks, the approval
+// preview) do not use this.
+func singleLine(s string) string {
+	if !strings.ContainsAny(s, "\n\r\t") {
+		return s
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// truncateRunes shortens s to at most maxLen runes, marking the cut with an
+// ellipsis. Rune-based like truncateJSON: a byte slice through a multi-byte
+// character renders as a replacement glyph in the middle of the user's text.
+func truncateRunes(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
 }
 
 // or returns value when non-empty, otherwise other.

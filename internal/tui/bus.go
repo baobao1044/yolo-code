@@ -39,6 +39,12 @@ var renderTopics = []event.Topic{
 	"approval.request", "verification.>", "reflection.note",
 	"patch.applied", "memory.update", "coord.>", "cost.>", "error",
 	"user.>", "command.response",
+	// The multi-agent run's terminal signal is coord.plan.done, so coord.>
+	// above covers it. It used to be the bare "plan.done" — the one
+	// coordination event outside its own family — and coord.> silently missed
+	// it, so a multi-agent run could never tell the TUI it had finished. That
+	// was worked around here by spelling the odd name out; the topic has since
+	// been renamed at the source and the workaround is gone with it.
 }
 
 // subscribe registers the rendering topics on the bus and returns the single

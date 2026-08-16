@@ -26,6 +26,10 @@ func TestPatchAdapterAppliesBlocksAndRestores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Cleanup rather than defer: the restore below has to read the tree back, and
+	// t.Cleanup runs after the whole test either way. Without it every run of the
+	// suite left a yolo-shadow-* directory in the real TMPDIR.
+	t.Cleanup(func() { _ = snap.close() })
 	cp := newShadowCheckpointer(snap)
 	engine := newPatchEngine(sandbox, cp, event.New())
 	adapter := &patchAdapter{engine: engine}

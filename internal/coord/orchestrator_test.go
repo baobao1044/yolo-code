@@ -15,6 +15,8 @@ package coord
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,12 +58,6 @@ func (f *recordingPublisher) Publish(ctx context.Context, e event.Event) error {
 	return f.delegate.Publish(ctx, e) // forward to the bus so the loop sees it
 }
 
-func (f *recordingPublisher) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.log)
-}
-
 // fakeRunner is an AgentRunner that publishes a scripted response per role.
 // It publishes to the BUS (EventPublisher) so the orchestrator's event loop —
 // which subscribed coord.> on the same bus — receives the agent events. The
@@ -83,10 +79,13 @@ func (r *fakeRunner) Run(ctx context.Context, role Role, task event.TaskAssignEv
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// A real runner whose event never reached the bus has not done its turn,
+	// so the publish error is returned rather than dropped — dropping it here
+	// would hide an orchestrator regression behind a stalled event loop.
 	switch role {
 	case RoleCoder:
 		diff := r.codeReady[task.TodoID]
-		_ = r.bus.Publish(ctx, &event.CodeReadyEvent{
+		return r.bus.Publish(ctx, &event.CodeReadyEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Diff: diff, SelfReport: "done",
 		})
 	case RoleReviewer:
@@ -95,11 +94,11 @@ func (r *fakeRunner) Run(ctx context.Context, role Role, task event.TaskAssignEv
 			approved = false
 			r.verdictN--
 		}
-		_ = r.bus.Publish(ctx, &event.ReviewVerdictEvent{
+		return r.bus.Publish(ctx, &event.ReviewVerdictEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Approved: approved,
 		})
 	case RoleTester:
-		_ = r.bus.Publish(ctx, &event.TestReportEvent{
+		return r.bus.Publish(ctx, &event.TestReportEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Passed: r.testPass, Output: "ok",
 		})
 	}
@@ -189,15 +188,22 @@ func TestOrchestratorHappyPath(t *testing.T) {
 
 // TestOrchestratorReworkCap: a todo the reviewer keeps rejecting hits the
 // rework cap (MaxReworkCycles=3) and escalates to Failed — NO infinite loop.
-// After 3 rejections the todo is Failed and Run returns (no 4th spawn).
+// After 3 rejections the todo is Failed and Run returns ErrPlanFailed (no 4th
+// spawn). Run must NOT return nil: AllDone is true for a Failed todo, so a nil
+// return would make "the plan gave up" indistinguishable from "the plan
+// succeeded".
 func TestOrchestratorReworkCap(t *testing.T) {
 	o, bus, runner, pub := newTestOrchestrator(t, []string{"implement X"}, true, 99, true)
 	// verdictN=99 → reviewer always rejects; cap should fire after 3 cycles.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	o.Start(ctx)
-	if err := o.Run(ctx, "refactor X, add tests, fix CI"); err != nil {
-		t.Fatalf("Run: %v", err)
+	err := o.Run(ctx, "refactor X, add tests, fix CI")
+	if !errors.Is(err, ErrPlanFailed) {
+		t.Fatalf("Run = %v, want ErrPlanFailed (the rework cap gave up on todo_A)", err)
+	}
+	if !strings.Contains(err.Error(), "todo_A") {
+		t.Errorf("Run error %q does not name the failed todo", err)
 	}
 	o.Stop(ctx)
 	_ = bus.Close()
@@ -225,22 +231,69 @@ func TestOrchestratorReworkCap(t *testing.T) {
 	_ = runner
 }
 
-// TestOrchestratorCancel: a canceled ctx aborts the run — cancelAll is called
-// and Run returns ctx.Err() (or a cancel-derived error), not a hang.
+// TestOrchestratorCancel: a canceled ctx aborts the run. This test used to have
+// no assertion at all — its only conditional was an empty `if err == nil {}`,
+// so it could not go red, and having no watchdog it would have BLOCKED the
+// suite rather than reported if the run wedged. It is the only test named for
+// cancellation, so it now pins the whole contract:
+//
+//   - Run returns, and returns promptly (watchdog).
+//   - It returns the context's error, so the caller can tell cancellation from
+//     completion.
+//   - It does NOT return ErrPlanFailed: the operator stopping a run is not the
+//     plan giving up.
+//   - No todo is left non-terminal — a canceled run that leaves a todo Pending
+//     reports the plan as neither done nor failed.
+//   - plan.done is still published, because it is the only signal a consumer
+//     can wait on.
 func TestOrchestratorCancel(t *testing.T) {
-	o, bus, _, _ := newTestOrchestrator(t, []string{"implement X"}, true, 0, true)
+	bus := event.New()
+	defer func() { _ = bus.Close() }()
+	rec := newPlanDoneRecorder(bus)
+	plan := Plan{ID: "p1", Goal: "refactor X, add tests, fix CI", Todos: []Todo{
+		{ID: "todo_A", Title: "implement X", Assignee: "coder", Status: Pending},
+		{ID: "todo_B", Title: "test X", Assignee: "coder", Status: Pending, DependsOn: []string{"todo_A"}},
+	}}
+	// muteRunner accepts the turn and publishes nothing, so the run is still in
+	// flight when the cancel lands (a synchronous fake would finish first and
+	// never exercise the cancel path — which is what the old test did).
+	o := NewOrchestrator(Config{MaxReworkCycles: 3, Concurrency: 1},
+		fakePlanner{plan: plan, mode: Multi}, bus, rec, muteRunner{})
+
 	ctx, cancel := context.WithCancel(context.Background())
 	o.Start(ctx)
-	// Cancel before Run can complete (the runner is synchronous so Run would
-	// normally finish; cancel first to force the cancel path).
+	errCh := make(chan error, 1)
+	go func() { errCh <- o.Run(ctx, plan.Goal) }()
+	time.Sleep(10 * time.Millisecond) // let the first todo get dispatched
 	cancel()
-	err := o.Run(ctx, "refactor X, add tests, fix CI")
-	if err == nil {
-		// Run may complete before noticing cancel (synchronous fakes); that's
-		// acceptable. The hard requirement is: Run does NOT hang.
+
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Run did not return 5s after cancel — the run is wedged")
 	}
-	o.Stop(ctx)
-	_ = bus.Close()
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run = %v, want context.Canceled", err)
+	}
+	if errors.Is(err, ErrPlanFailed) {
+		t.Errorf("Run = %v — a canceled plan has not failed", err)
+	}
+	for _, id := range []string{"todo_A", "todo_B"} {
+		if got := o.plan.StatusOf(id); got != Failed {
+			t.Errorf("todo %s = %v after cancel, want Failed (terminal)", id, got)
+		}
+	}
+	if pd := rec.only(t); pd.Done {
+		t.Errorf("plan.done Done = true for a canceled run")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+	if err := o.Stop(stopCtx); err != nil {
+		t.Errorf("Stop: %v", err)
+	}
 }
 
 // TestOrchestratorStopIdempotent: Stop is idempotent (sync.Once) — calling it

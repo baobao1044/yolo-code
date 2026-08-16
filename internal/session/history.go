@@ -6,6 +6,37 @@
 // action. Undo and the engine's verify-rollback share one mechanism —
 // Checkpointer.Rollback — so "the model reverted its own bad patch" and "the
 // user hit undo" are the same operation seen from two callers (§3.3.2).
+//
+// DEAD SEAM — the whole file, and it is the largest one in the tree. None of
+// RecordEntry, Checkpoint, Undo, Restore, or History has a caller outside this
+// package's own tests. Not "underused": zero. The one thing that looks like a
+// counterexample is not one — patch/engine.go:134 does call a Checkpoint, but on
+// patch.Checkpointer, its own interface, satisfied in cmd/yolo by
+// newShadowCheckpointer; internal/patch does not import internal/session at all.
+// So checkpointing works, and this manager never hears about it.
+//
+// Because nothing writes it, Task.History is empty for the whole life of every
+// production task, and three things downstream read as live while being dead:
+//
+//   - context/engine.go:272 gatherConversation turns the history into the
+//     Conversation part group, which is therefore always empty — while
+//     context/budget.go gives PctConversation a 45% share that allocate()
+//     subtracts from the User remainder whether or not anything fills it.
+//   - cancel.go:106 walks the history to build a cancelled task's Partial
+//     payload, so a cancelled task always reports having done nothing.
+//   - task.undone and task.restored are topics nothing ever publishes.
+//
+// What is NOT broken by this matters more than what is: the model still sees its
+// own turns, because cognitive.Core keeps a separate c.history and merges each
+// freshly compiled prompt into it. So the conversation the token budget accounts
+// for is always empty, and the conversation actually sent to the provider is the
+// unaccounted one — bounded by maxHistoryMessages = 200, a message count with no
+// token accounting at all.
+//
+// Pinned by cmd/yolo/deadseam_test.go: four of the five methods by name, and
+// Restore by hand, because the matcher there cannot tell it apart from the
+// runtime's own Restorer port. Wiring this subsystem or deleting it is a spec
+// decision; what is not defensible is leaving it looking connected.
 
 package session
 
@@ -20,20 +51,36 @@ import (
 // File 04 §3.7). It assigns the monotonic Seq and stamps At; the caller
 // supplies Kind/Snapshot/Summary/Paths/Reversible. The task is persisted so
 // the history survives a restart.
-func (m *Manager) RecordEntry(tid TaskID, e HistoryEntry) {
+//
+// It returns ErrUnknownTask for an id the manager does not hold, and the
+// store's error if the persist fails. Both used to be swallowed — the method
+// returned nothing, so `_ = m.store.SaveTask(...)` was the only thing the
+// signature allowed. That made it the one SaveTask in this package that did
+// not report (compare Checkpoint, Undo, Restore, CompleteTask, Cancel), and
+// the failure it hid is not cosmetic: the entry is in memory and not on disk,
+// so the next Resume loads a task whose undo stack is one rung shorter with
+// nobody having been told. "Undo did nothing" and "there was nothing to undo"
+// look identical from the outside.
+//
+// The append is NOT rolled back when the persist fails. RecordEntry is not
+// transactional and this does not make it one; the caller is told what
+// happened and owns the decision. See history_persist_test.go, which pins both
+// halves.
+func (m *Manager) RecordEntry(tid TaskID, e HistoryEntry) error {
 	m.mu.Lock()
 	t, ok := m.tasks[tid]
 	if !ok {
 		m.mu.Unlock()
-		return
+		return ErrUnknownTask
 	}
 	e.Seq = len(t.History)
 	if e.At.IsZero() {
 		e.At = time.Now().UTC()
 	}
 	t.History = append(t.History, e)
+	snap := t.clone()
 	m.mu.Unlock()
-	_ = m.store.SaveTask(context.Background(), t)
+	return m.store.SaveTask(context.Background(), snap)
 }
 
 // Checkpoint takes a snapshot of paths, records a checkpoint history entry,
@@ -59,8 +106,9 @@ func (m *Manager) Checkpoint(ctx context.Context, tid TaskID, name string, paths
 		At:         time.Now().UTC(),
 	})
 	t.Checkpoint = name
+	persisted := t.clone()
 	m.mu.Unlock()
-	if err := m.store.SaveTask(ctx, t); err != nil {
+	if err := m.store.SaveTask(ctx, persisted); err != nil {
 		return "", err
 	}
 	if err := m.bus.Publish(ctx, &event.CheckpointEvent{
@@ -103,8 +151,9 @@ func (m *Manager) Undo(ctx context.Context, tid TaskID) error {
 	} else {
 		t.Checkpoint = ""
 	}
+	snap := t.clone()
 	m.mu.Unlock()
-	if err := m.store.SaveTask(ctx, t); err != nil {
+	if err := m.store.SaveTask(ctx, snap); err != nil {
 		return err
 	}
 	return m.bus.Publish(ctx, &event.UndoneEvent{
@@ -142,19 +191,21 @@ func (m *Manager) Restore(ctx context.Context, tid TaskID, name string) error {
 	m.mu.Lock()
 	t.History = t.History[:idx+1] // discard everything after the checkpoint
 	t.Checkpoint = name
+	snap := t.clone()
 	m.mu.Unlock()
-	if err := m.store.SaveTask(ctx, t); err != nil {
+	if err := m.store.SaveTask(ctx, snap); err != nil {
 		return err
 	}
 	return m.bus.Publish(ctx, &event.RestoredEvent{Task: string(tid), Name: name})
 }
 
 // History returns a copy of the task's history entries (read-only view for the
-// undo menu, File 14).
+// undo menu, File 14). The copy is taken under the lock: taken after releasing
+// it, as it was, the TUI's render raced every append the drive goroutine made.
 func (m *Manager) History(tid TaskID) []HistoryEntry {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	t, ok := m.tasks[tid]
-	m.mu.Unlock()
 	if !ok {
 		return nil
 	}

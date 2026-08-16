@@ -3,8 +3,6 @@ package cognitive
 import (
 	"strings"
 	"testing"
-
-	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // TestToolPolicyDeniesUnsafeToolCall is the L6-005 exit criterion: a tool not
@@ -12,7 +10,7 @@ import (
 // denial error names the tool so it surfaces to the model.
 func TestToolPolicyDeniesUnsafeToolCall(t *testing.T) {
 	p := NewToolPolicy([]string{"read_file", "list_files"})
-	err := p.Allow(ToolCall{Tool: "rm"}, nil)
+	err := p.Allow(ToolCall{Tool: "rm"})
 	if err == nil {
 		t.Fatal("Allow(rm) err = nil, want a denial (rm is not allowlisted)")
 	}
@@ -24,33 +22,30 @@ func TestToolPolicyDeniesUnsafeToolCall(t *testing.T) {
 	}
 }
 
+// TestToolPolicyDenialListsTheRealTools pins the actionable half of the denial:
+// the message tells the model which tools do exist. Without it the model's next
+// turn is another guess, and the run spends a turn per invented name.
+func TestToolPolicyDenialListsTheRealTools(t *testing.T) {
+	p := NewToolPolicy([]string{"read_file", "list_files"})
+	err := p.Allow(ToolCall{Tool: "write_file"})
+	if err == nil {
+		t.Fatal("Allow(write_file) = nil, want a denial")
+	}
+	for _, want := range []string{"list_files", "read_file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("denial %q does not name the available tool %q", err.Error(), want)
+		}
+	}
+}
+
 // TestToolPolicyAdmitsAllowedTool pins the positive case: a tool on the
 // allowlist is admitted (nil error).
 func TestToolPolicyAdmitsAllowedTool(t *testing.T) {
 	p := NewToolPolicy([]string{"read_file", "list_files"})
 	for _, tool := range []string{"read_file", "list_files"} {
-		if err := p.Allow(ToolCall{Tool: tool}, nil); err != nil {
+		if err := p.Allow(ToolCall{Tool: tool}); err != nil {
 			t.Errorf("Allow(%q) = %v, want nil", tool, err)
 		}
-	}
-}
-
-// TestToolPolicyPerTaskOverrideAllows pins §7.5.1: the PerTaskAllow map admits
-// a tool the global allowlist denies. (The spec's field is keyed by tool name —
-// an override that admits a tool for the tasks it applies to; the name is
-// per-task in spirit. A separate per-task-id map is a richer override added
-// when the runtime distinguishes privileged tasks.)
-func TestToolPolicyPerTaskOverrideAllows(t *testing.T) {
-	p := NewToolPolicy([]string{"read_file"})
-	p.PerTaskAllow = map[string]bool{"write_file": true}
-	task := &session.Task{ID: "t_priv"}
-	// The override admits write_file for any task carrying it.
-	if err := p.Allow(ToolCall{Tool: "write_file"}, task); err != nil {
-		t.Errorf("Allow(write_file) with override = %v, want nil", err)
-	}
-	// A tool with neither allowlist nor override is still denied.
-	if err := p.Allow(ToolCall{Tool: "rm"}, nil); err == nil {
-		t.Error("Allow(rm) without allowlist or override = nil, want a denial")
 	}
 }
 
@@ -59,7 +54,7 @@ func TestToolPolicyPerTaskOverrideAllows(t *testing.T) {
 // safe fallback when no policy is configured.
 func TestToolPolicyNilDeniesAll(t *testing.T) {
 	var p *ToolPolicy
-	err := p.Allow(ToolCall{Tool: "read_file"}, nil)
+	err := p.Allow(ToolCall{Tool: "read_file"})
 	if err == nil {
 		t.Fatal("nil policy Allow = nil, want a denial (default-deny posture)")
 	}
@@ -124,7 +119,7 @@ func TestPolicyGatesBeforeEmit(t *testing.T) {
 	// Filter through the policy, emitting only admitted calls.
 	var admitted []ToolCall
 	for _, c := range turn.ToolCalls {
-		if err := p.Allow(c, nil); err != nil {
+		if err := p.Allow(c); err != nil {
 			continue
 		}
 		admitted = append(admitted, c)

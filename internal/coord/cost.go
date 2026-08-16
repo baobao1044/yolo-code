@@ -29,9 +29,12 @@ import (
 // agent turn consults it before dispatch so a runaway plan aborts at the
 // deadline rather than spending unboundedly.
 type Budget struct {
-	id      event.TaskID
-	ledger  CostLedger
-	mu      sync.Mutex
+	id     event.TaskID
+	ledger CostLedger
+	// id and ledger are write-once at construction and the two mutating
+	// operations are each guarded by their own Once, so there is no shared
+	// state left for a mutex to protect. One used to sit here unlocked, which
+	// reads as synchronisation and provides none.
 	regOnce sync.Once
 	endOnce sync.Once
 }
@@ -57,6 +60,10 @@ func (b *Budget) Register() {
 // is past (abort — no further dispatch). When the ledger has no deadline for
 // the task (ok=false), there is no enforcement, so the check returns true
 // (proceed).
+//
+// Despite the name this reads only the deadline; Snapshot's dollars, loops and
+// tokens are discarded, and are structurally zero anyway. See the DEAD SEAM
+// note on infra.Cost.Snapshot before giving this a real ledger.
 func (b *Budget) CheckBeforeDispatch() bool {
 	if b.ledger == nil {
 		return true
@@ -64,6 +71,14 @@ func (b *Budget) CheckBeforeDispatch() bool {
 	_, _, _, deadline, ok := b.ledger.Snapshot(b.id)
 	if !ok {
 		return true // no deadline set → no budget enforcement
+	}
+	// A zero deadline means the ledger has no wall-clock cap configured, which
+	// is not the same as a cap that has already elapsed. Comparing against it
+	// directly makes Before false — the zero time is in the year 1 — so an
+	// unconfigured budget would refuse the very first dispatch of every plan.
+	// ok only tells us NewTask ran, not that a deadline was set.
+	if deadline.IsZero() {
+		return true
 	}
 	return time.Now().Before(deadline)
 }

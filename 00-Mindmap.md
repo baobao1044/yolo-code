@@ -71,7 +71,7 @@ mindmap
         6 types
           Working Conversation Exec Repository Knowledge Preference
         update ONLY via events
-        pure-Go vector store
+        pure-Go retrieval index - lexical as shipped
         per-function chunking
     Coordination
       L11 Multi-Agent[12]

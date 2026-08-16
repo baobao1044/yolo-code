@@ -5,55 +5,84 @@
 // verification stages must pass and at what strictness.
 //
 // Sprint 3 (L6-005) implements the admit/deny gates. The policies are pure
-// decisions (no side effects); the runtime applies them between the Planner
-// turn and tool dispatch. A denied tool call surfaces to the model as a tool
-// result with the denial reason; the runtime wires that path in a later
-// sprint.
+// decisions (no side effects); Core.Think applies the Tool Policy between the
+// Planner turn and the Turn it hands back, so a denied call never becomes work
+// the runtime can dispatch. The denial surfaces to the model as a tool result
+// with the reason (see enforceToolPolicy).
 
 package cognitive
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
-
-	"github.com/baobao1044/yolo-code/internal/session"
 )
 
 // ToolPolicy gates which tools a Planner may call (File 07 §7.5.1). Allowlist
-// is the global set; PerTaskAllow overrides per task (e.g. a privileged task
-// may call a tool the default policy denies). MaxConcurrent bounds parallel
-// tools per turn (default 1 — Sprint 3's drive loop is single-tool-per-turn).
+// is the set of tool names the model may emit; every other name is denied.
+//
+// The set comes from what the model was actually offered: Core.New builds its
+// policy from the tool names it is constructed with, and those same names are
+// what become the provider's native tool definitions. So the allowlist cannot
+// drift away from the advertisement — changing one changes the other, because
+// they are one list (see DefaultTools).
+//
+// The struct used to carry a PerTaskAllow map and a MaxConcurrent bound. Both
+// were dead, and PerTaskAllow could not do the job its doc described: it was
+// keyed by tool name, not task, so "allow this tool for privileged tasks" was
+// really "allow this tool for every task that passes a non-nil pointer". They
+// are removed rather than wired — an override nobody configures is a way for
+// the allowlist to be quietly wider than it reads.
 type ToolPolicy struct {
-	Allowlist     map[string]bool
-	PerTaskAllow  map[string]bool
-	MaxConcurrent int
+	Allowlist map[string]bool
 }
 
-// NewToolPolicy builds a policy with the given allowed tool names and a
-// MaxConcurrent of 1 (the Sprint 3 default — one tool per turn).
+// NewToolPolicy builds a policy admitting exactly the given tool names.
 func NewToolPolicy(allowed []string) *ToolPolicy {
-	p := &ToolPolicy{Allowlist: map[string]bool{}, MaxConcurrent: 1}
+	p := &ToolPolicy{Allowlist: map[string]bool{}}
 	for _, a := range allowed {
 		p.Allowlist[a] = true
 	}
 	return p
 }
 
-// Allow admits or denies a tool call (File 07 §7.5.1). A tool is allowed iff
-// it is in Allowlist OR in PerTaskAllow for the given task's id. A denial
-// returns an error naming the tool and why; the runtime surfaces it to the
-// model. A nil policy denies everything (default-deny posture, File 02).
-func (p *ToolPolicy) Allow(call ToolCall, task *session.Task) error {
+// Allow admits or denies a tool call (File 07 §7.5.1). A tool is allowed iff it
+// is in Allowlist. A nil policy denies everything (default-deny posture, File
+// 02).
+//
+// The denial is written for the model to read, not just for a log: it names the
+// tool it refused AND lists the ones that exist. A model told only that its
+// choice was refused guesses again — usually at another name it invented — and
+// burns the turn; one handed the list picks from it.
+func (p *ToolPolicy) Allow(call ToolCall) error {
 	if p == nil {
 		return fmt.Errorf("tool %q denied: no policy configured (default-deny)", call.Tool)
 	}
 	if p.Allowlist[call.Tool] {
 		return nil
 	}
-	if task != nil && p.PerTaskAllow[call.Tool] {
+	allowed := p.AllowedTools()
+	if len(allowed) == 0 {
+		return fmt.Errorf("tool %q is not allowed: no tools are available", call.Tool)
+	}
+	return fmt.Errorf("tool %q is not allowed: it is not one of the tools you were given. The available tools are: %s. Use one of those instead",
+		call.Tool, strings.Join(allowed, ", "))
+}
+
+// AllowedTools returns the admitted tool names in sorted order — the list the
+// denial quotes back to the model, and what a caller reports when it gives up
+// on one that keeps guessing.
+func (p *ToolPolicy) AllowedTools() []string {
+	if p == nil {
 		return nil
 	}
-	return fmt.Errorf("tool %q not allowed", call.Tool)
+	names := make([]string, 0, len(p.Allowlist))
+	for n := range p.Allowlist {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // VerificationPolicy defines what "done" means for a task (File 07 §7.5.2):

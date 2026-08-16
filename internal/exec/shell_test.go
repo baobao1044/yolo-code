@@ -27,7 +27,11 @@ import (
 func newBash(t *testing.T) *Bash {
 	t.Helper()
 	root := t.TempDir()
-	return NewBash(&Sandbox{root: root, cwd: root})
+	// NewSandbox, not a literal — see the note on newSandbox in sandbox_test.go.
+	// Bash resolves the paths it reports as changed, so an unnormalized root
+	// makes those resolutions fail on any host where the tempdir sits under a
+	// symlink.
+	return NewBash(NewSandbox(root, root))
 }
 
 func TestBashAllowlistedCommandRuns(t *testing.T) {
@@ -131,7 +135,12 @@ func groupSpawnScript(marker string) string {
 	}
 	// sh: background a grandchild that waits 3s then writes the marker; the
 	// shell itself sleeps 30s so it doesn't exit before the grandchild.
-	return `sh -c "(sleep 3 && touch ` + marker + `) & sleep 30"`
+	//
+	// No `sh -c` wrapper here: Bash.Run already runs the string under `sh -c`,
+	// and a nested interpreter with -c classifies critical, so the wrapper made
+	// Bash refuse the command outright — the test then "passed" without ever
+	// spawning anything, which is no test of tree-kill at all.
+	return `(sleep 3 && touch ` + marker + `) & sleep 30`
 }
 
 // keep event import used across tickets that accrete here.

@@ -135,14 +135,3 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
-
-// errContains checks the error's message contains want; nil error fails.
-func errContains(t *testing.T, err error, want string) {
-	t.Helper()
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("err = %q, want substring %q", err.Error(), want)
-	}
-}

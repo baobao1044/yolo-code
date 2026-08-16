@@ -75,9 +75,7 @@ func splitClauses(goal string) []string {
 func splitAnd(parts []string) []string {
 	var out []string
 	for _, p := range parts {
-		for _, s := range strings.Split(p, " and ") {
-			out = append(out, s)
-		}
+		out = append(out, strings.Split(p, " and ")...)
 	}
 	return out
 }
@@ -96,6 +94,9 @@ func newTodoID(i int) string {
 // randHex returns n bytes of hex (2n hex chars).
 func randHex(n int) string {
 	b := make([]byte, n)
+	// Genuine drop: crypto/rand.Read never returns an error (since Go 1.24 it
+	// panics if the OS entropy source fails), and it always fills b. There is
+	// no failure to propagate.
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

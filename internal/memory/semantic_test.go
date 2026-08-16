@@ -10,6 +10,8 @@ package memory
 
 import (
 	"context"
+	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -59,7 +61,7 @@ func TestCosineSimilarity(t *testing.T) {
 // seeded chunk with shared terms more strongly than a disjoint chunk.
 func TestSemanticRetrieveReturnsSeededDocsInOrder(t *testing.T) {
 	emb := NewHashEmbedder(512)
-	s := NewSemanticStoreWith(emb)
+	s := NewLexicalStoreWith(emb)
 
 	// Seed three chunks with distinct term profiles.
 	s.addChunk(context.Background(), chunkVec{path: "a.go", kind: "function", name: "Parse", text: "func Parse the input stream"})
@@ -96,7 +98,7 @@ func TestSemanticRetrieveReturnsSeededDocsInOrder(t *testing.T) {
 // cap is a later refinement).
 func TestSemanticRetrieveBudgetCapsParts(t *testing.T) {
 	emb := NewHashEmbedder(256)
-	s := NewSemanticStoreWith(emb)
+	s := NewLexicalStoreWith(emb)
 	// All three chunks share "alpha" with the query → all sim>0.
 	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha one"})
 	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "alpha two"})
@@ -115,7 +117,7 @@ func TestSemanticRetrieveBudgetCapsParts(t *testing.T) {
 
 // TestSemanticRetrieveEmptyStoreReturnsNil: an empty store retrieves nothing.
 func TestSemanticRetrieveEmptyStoreReturnsNil(t *testing.T) {
-	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s := NewLexicalStoreWith(NewHashEmbedder(256))
 	if parts := s.Retrieve(context.Background(), "anything", 5); parts != nil {
 		t.Errorf("Retrieve on empty store = %v, want nil", parts)
 	}
@@ -124,7 +126,7 @@ func TestSemanticRetrieveEmptyStoreReturnsNil(t *testing.T) {
 // TestSemanticSizeReflectsInsertedChunks: Size() tracks addChunk/BulkInsert/
 // Delete (§11.6.2).
 func TestSemanticSizeReflectsInsertedChunks(t *testing.T) {
-	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s := NewLexicalStoreWith(NewHashEmbedder(256))
 	if got := s.Size(); got != 0 {
 		t.Errorf("Size on empty = %d, want 0", got)
 	}
@@ -138,7 +140,7 @@ func TestSemanticSizeReflectsInsertedChunks(t *testing.T) {
 // TestSemanticDeleteRemovesChunk: Delete(id) drops one chunk by id (§11.6.2);
 // a nonexistent id is a no-op.
 func TestSemanticDeleteRemovesChunk(t *testing.T) {
-	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s := NewLexicalStoreWith(NewHashEmbedder(256))
 	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha one"})
 	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta two"})
 	before := s.Size()
@@ -162,7 +164,7 @@ func TestSemanticDeleteRemovesChunk(t *testing.T) {
 // chunks (zero lastAccess) are evicted first.
 func TestSemanticEvictDropsLeastRecentlyUsed(t *testing.T) {
 	emb := NewHashEmbedder(256)
-	s := NewSemanticStoreWith(emb)
+	s := NewLexicalStoreWith(emb)
 	// Three chunks; "alpha" shares a term with a retrieval so its lastAccess
 	// gets bumped; the other two stay never-accessed.
 	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha shared"})
@@ -182,7 +184,7 @@ func TestSemanticEvictDropsLeastRecentlyUsed(t *testing.T) {
 // TestSemanticEvictBelowCapacityIsNoop: Evict with a capacity already
 // satisfied doesn't drop anything.
 func TestSemanticEvictBelowCapacityIsNoop(t *testing.T) {
-	s := NewSemanticStoreWith(NewHashEmbedder(256))
+	s := NewLexicalStoreWith(NewHashEmbedder(256))
 	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha"})
 	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "beta"})
 	s.Evict(5)
@@ -195,7 +197,7 @@ func TestSemanticEvictBelowCapacityIsNoop(t *testing.T) {
 // whose cosine is below θ (§11.6.2). With a high θ, a weak match is filtered.
 func TestSemanticThresholdFiltersLowSimilarity(t *testing.T) {
 	emb := NewHashEmbedder(256)
-	s := NewSemanticStoreWith(emb)
+	s := NewLexicalStoreWith(emb)
 	s.addChunk(context.Background(), chunkVec{path: "a.go", text: "alpha alpha alpha"})
 	s.addChunk(context.Background(), chunkVec{path: "b.go", text: "completely different tokens"})
 
@@ -226,4 +228,70 @@ func vecEq(a, b []float32) bool {
 		}
 	}
 	return true
+}
+
+// TestDefaultEmbedderIsLexicalNotSemantic pins the honesty claim the docs make
+// (and that the "Semantic"/"vector" naming used to contradict): with the
+// shipped embedder, retrieval matches shared literal tokens only. A paraphrase
+// that shares no words with the indexed chunk scores nothing. If someone later
+// wires a real embedding model as the default, this test SHOULD fail — that is
+// the signal to update the docs, not to weaken the test.
+func TestDefaultEmbedderIsLexicalNotSemantic(t *testing.T) {
+	ctx := context.Background()
+	s := NewLexicalStoreWith(NewHashEmbedder(256))
+	s.addChunk(ctx, chunkVec{path: "a.go", kind: "function", name: "Sum",
+		text: "func Sum(values []int) int { total := 0; for _, v := range values { total += v }; return total }"})
+
+	// Literal overlap retrieves it.
+	if got := s.Retrieve(ctx, "Sum values total", 3); len(got) == 0 {
+		t.Fatal("Retrieve on shared tokens = 0 hits; the lexical path is broken")
+	}
+	// A synonym-only paraphrase does not — no meaning is being compared.
+	if got := s.Retrieve(ctx, "add up the numbers in a list", 3); len(got) != 0 {
+		t.Errorf("Retrieve on a synonym-only paraphrase = %d hits, want 0: the default "+
+			"embedder is lexical (hashed term frequency), so this must not match. If a real "+
+			"embedding model is now the default, fix the docs that call this lexical.", len(got))
+	}
+}
+
+// TestLexicalStoreLazyEmbedderIsRaceFree: NewLexicalStore leaves embed nil, so
+// the first insert installs the default hash embedder. That install used to sit
+// outside the mutex in three places (addChunk, Reindex, BulkInsert), so two
+// concurrent inserts raced on the field — and the loser's embedder was silently
+// discarded after chunks had already been vectorised with it. Run under -race:
+// this fails with "DATA RACE" on the unfixed store.
+func TestLexicalStoreLazyEmbedderIsRaceFree(t *testing.T) {
+	ctx := context.Background()
+	s := NewLexicalStore() // no embedder — the lazy-install path
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			switch i % 3 {
+			case 0:
+				s.addChunk(ctx, chunkVec{path: "a" + strconv.Itoa(i) + ".go", kind: "function",
+					name: "F", text: "func F" + strconv.Itoa(i) + "() int { return " + strconv.Itoa(i) + " }"})
+			case 1:
+				s.Reindex(ctx, "b"+strconv.Itoa(i)+".go",
+					[]byte("package p\n\nfunc G"+strconv.Itoa(i)+"() int { return "+strconv.Itoa(i)+" }\n"))
+			default:
+				s.BulkInsert(ctx, []Chunk{{Path: "c" + strconv.Itoa(i) + ".go", Kind: "function",
+					Name: "H", Text: "func H" + strconv.Itoa(i) + "() int { return " + strconv.Itoa(i) + " }"}})
+			}
+		}(i)
+	}
+	// Concurrent readers: Retrieve reads s.embed too.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.Retrieve(ctx, "func return", 3)
+			s.Size()
+		}()
+	}
+	wg.Wait()
+	if s.Size() == 0 {
+		t.Error("Size() = 0 after 8 concurrent inserts, want >0")
+	}
 }

@@ -13,8 +13,110 @@
 package infra
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+// TestPermissionsGlobBypasses is the table for the two globMatch bypasses that
+// compounded into a policy that was simultaneously too permissive on crafted
+// paths and useless on real ones. Prefix matching with no separator boundary let
+// a sibling directory pose as the workspace; no ".." normalisation let a
+// traversal escape it while still matching the prefix.
+func TestPermissionsGlobBypasses(t *testing.T) {
+	const root = "/repo"
+	p := newPermissions(PermissionsConfig{Mode: "auto", Root: root})
+	cases := []struct {
+		name string
+		res  string
+		want Verdict
+	}{
+		// The workspace itself and everything genuinely beneath it.
+		{"workspace root", "/repo", VerAllow},
+		{"file in workspace", "/repo/a.go", VerAllow},
+		{"nested file in workspace", "/repo/deep/nested/n.go", VerAllow},
+		{"harmless .. inside workspace", "/repo/pkg/../a.go", VerAllow},
+		// Bypass (a1): no separator boundary — a sibling whose name merely
+		// starts with the workspace's name prefix-matched "/repo".
+		{"sibling with shared prefix", "/repo-evil/x", VerDeny},
+		{"sibling suffixed", "/repository/secrets", VerDeny},
+		{"adjacent file, not a dir", "/repo.bak", VerDeny},
+		// Bypass (a2): no ".." normalisation — a traversal that resolves far
+		// outside the workspace still prefix-matched it.
+		{"traversal out of workspace", "/repo/../../etc/passwd", VerDeny},
+		{"traversal one level out", "/repo/../etc/passwd", VerDeny},
+		{"traversal back in is fine", "/repo/sub/../../repo/a.go", VerAllow},
+		// Plain outside paths (these always worked).
+		{"unrelated absolute path", "/etc/passwd", VerDeny},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if v, _ := p.Check(ActFileWrite, c.res); v != c.want {
+				t.Errorf("Check(file.write, %q) = %q, want %q", c.res, v, c.want)
+			}
+			// file.delete shares the rule; the bypass must be closed for both.
+			if v, _ := p.Check(ActFileDelete, c.res); v != c.want {
+				t.Errorf("Check(file.delete, %q) = %q, want %q", c.res, v, c.want)
+			}
+		})
+	}
+}
+
+// TestPermissionsRootIsConfigurable pins the second half of the defect: the
+// workspace root comes from config, so a real repository path is allowed.
+// The old hardcoded "/repo" matched nothing on a real machine, which meant
+// every genuine absolute write fell through to the catch-all deny.
+func TestPermissionsRootIsConfigurable(t *testing.T) {
+	root := t.TempDir()
+	p := newPermissions(PermissionsConfig{Mode: "auto", Root: root})
+	if v, _ := p.Check(ActFileWrite, filepath.Join(root, "main.go")); v != VerAllow {
+		t.Errorf("write inside the configured root = %q, want allow", v)
+	}
+	if v, _ := p.Check(ActFileWrite, root+"-evil/main.go"); v != VerDeny {
+		t.Errorf("write to a sibling of the configured root = %q, want deny", v)
+	}
+	if v, _ := p.Check(ActFileWrite, "/etc/passwd"); v != VerDeny {
+		t.Errorf("write outside the configured root = %q, want deny", v)
+	}
+}
+
+// TestPermissionsEmptyRootFallsBackToWorkingDir pins the default: an unset root
+// resolves to the process working directory rather than a literal that matches
+// nothing, so a caller that hasn't plumbed a repo root through yet still gets a
+// usable policy instead of a blanket deny.
+func TestPermissionsEmptyRootFallsBackToWorkingDir(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Skipf("no working directory: %v", err)
+	}
+	p := newPermissions(PermissionsConfig{Mode: "auto"})
+	if v, _ := p.Check(ActFileWrite, filepath.Join(wd, "a.go")); v != VerAllow {
+		t.Errorf("write inside the working directory = %q, want allow", v)
+	}
+	if v, _ := p.Check(ActFileWrite, "/etc/passwd"); v != VerDeny {
+		t.Errorf("write to /etc/passwd = %q, want deny", v)
+	}
+}
+
+// TestPermissionsCommandGlobsUnaffected pins that the path-aware matching did
+// not leak into cmd.exec patterns: those are command strings, not paths, and
+// must keep plain prefix semantics ("git status*" matches "git status --short").
+func TestPermissionsCommandGlobsUnaffected(t *testing.T) {
+	p := newPermissions(PermissionsConfig{Mode: "auto", Root: "/repo"})
+	for _, c := range []struct {
+		cmd  string
+		want Verdict
+	}{
+		{"git status --short", VerAllow},
+		{"ls -la /tmp", VerAllow},
+		{"git push --force", VerAsk},
+		{"weird-cmd", VerAsk},
+	} {
+		if v, _ := p.Check(ActCmdExec, c.cmd); v != c.want {
+			t.Errorf("Check(cmd.exec, %q) = %q, want %q", c.cmd, v, c.want)
+		}
+	}
+}
 
 // TestPermissionsYoloModeAllowsAll pins §13.8.2: yolo mode allows every action
 // on every resource. This is the P1-max "I accept the risk" mode.
@@ -57,6 +159,26 @@ func TestPermissionsReadOnlyDeniesWritesAndNet(t *testing.T) {
 	}
 }
 
+// TestPermissionsReadOnlyDeniesUnknownActions pins the fail-closed direction of
+// read-only mode. The gate used to deny isWrite()+net.request and allow
+// everything else, so mcp.tool — which writes files and reaches the network
+// through a server this policy never inspects — was allowed in the one mode
+// whose purpose is to forbid exactly that, and so was any Action added later.
+// Auto mode already defaults unknown actions to ask; read-only defaulting them
+// to allow made the stricter mode the permissive one.
+func TestPermissionsReadOnlyDeniesUnknownActions(t *testing.T) {
+	p := newPermissions(PermissionsConfig{Mode: "read-only"})
+	for _, a := range []Action{ActMCPTool, Action("db.drop"), Action("")} {
+		if v, _ := p.Check(a, "anything"); v != VerDeny {
+			t.Errorf("read-only Check(%q) = %q, want deny (an unclassified action is unaudited)", a, v)
+		}
+	}
+	// The allowlist must still admit the genuine read.
+	if v, _ := p.Check(ActFileRead, "/repo/a.go"); v != VerAllow {
+		t.Errorf("read-only file.read = %q, want allow", v)
+	}
+}
+
 // TestPermissionsAskModeDefersAll pins §13.8.2: ask mode returns "ask" for
 // every action — every action goes to HITL.
 func TestPermissionsAskModeDefersAll(t *testing.T) {
@@ -74,7 +196,9 @@ func TestPermissionsAskModeDefersAll(t *testing.T) {
 // deny; cmd.exec read-only cmds (ls) → allow; cmd.exec mutating (git commit) →
 // ask; net.request → deny.
 func TestPermissionsAutoDefaultPolicy(t *testing.T) {
-	p := newPermissions(PermissionsConfig{Mode: "auto"})
+	// Root is explicit now: the policy used to hardcode "/repo", which is not
+	// the workspace on any real machine.
+	p := newPermissions(PermissionsConfig{Mode: "auto", Root: "/repo"})
 	cases := []struct {
 		name string
 		act  Action

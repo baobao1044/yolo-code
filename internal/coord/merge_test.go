@@ -148,6 +148,94 @@ func TestMergeOnlyDoneTodos(t *testing.T) {
 	}
 }
 
+// contentVerifier mirrors the real cmd/yolo mergeVerifier: a patch counts as
+// verified iff it carries non-whitespace content. Used by the blank-diff tests
+// so they pin the behaviour the production seam actually sees.
+type contentVerifier struct{}
+
+func (contentVerifier) Verify(_ context.Context, combinedDiff string) (bool, error) {
+	return strings.TrimSpace(combinedDiff) != "", nil
+}
+
+// TestMergeAllDoneBlankDiffs: every Done todo produced no patch. The combined
+// diff must be empty and trivially verify — joining the blanks would fabricate
+// separator-only content ("\n\n" for three todos) that no todo produced and
+// that the verifier then rejects.
+func TestMergeAllDoneBlankDiffs(t *testing.T) {
+	plan := &Plan{ID: "p", Todos: []Todo{
+		{ID: "a", Status: Done, Artifacts: []string{"f1.go"}},
+		{ID: "b", Status: Done, Artifacts: []string{"f2.go"}},
+		{ID: "c", Status: Done, Artifacts: []string{"f3.go"}},
+	}}
+	diffs := map[string]string{"a": "", "b": "", "c": ""}
+	mp, err := Merge(context.Background(), plan, diffs, contentVerifier{})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if mp.CombinedDiff != "" {
+		t.Errorf("CombinedDiff = %q, want empty (no todo produced a patch)", mp.CombinedDiff)
+	}
+	if !mp.Verified {
+		t.Errorf("Verified = false, want true (empty patch trivially verifies)")
+	}
+}
+
+// TestMergeSkipsBlankDiffs: a blank diff between two real ones must not leave
+// a stray separator run in the combined patch.
+func TestMergeSkipsBlankDiffs(t *testing.T) {
+	plan := &Plan{ID: "p", Todos: []Todo{
+		{ID: "a", Status: Done, Artifacts: []string{"f1.go"}},
+		{ID: "blank", Status: Done, Artifacts: []string{"f2.go"}},
+		{ID: "c", Status: Done, Artifacts: []string{"f3.go"}},
+	}}
+	diffs := map[string]string{"a": "diff a", "blank": "   \n\t", "c": "diff c"}
+	mp, err := Merge(context.Background(), plan, diffs, contentVerifier{})
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if want := "diff a\ndiff c"; mp.CombinedDiff != want {
+		t.Errorf("CombinedDiff = %q, want %q", mp.CombinedDiff, want)
+	}
+}
+
+// TestMergeNotVerifiedErrorDetail: a rejected patch must say WHY — the bare
+// "failed verification" string told the caller nothing. The error wraps
+// ErrNotVerified and carries the merge's shape.
+func TestMergeNotVerifiedErrorDetail(t *testing.T) {
+	plan := &Plan{ID: "p", Todos: []Todo{
+		{ID: "a", Status: Done, Artifacts: []string{"f1.go"}},
+	}}
+	diffs := map[string]string{"a": "diff a"}
+	_, err := Merge(context.Background(), plan, diffs, fakeVerifier{pass: false})
+	if err == nil {
+		t.Fatalf("Merge: want error for verifier fail, got nil")
+	}
+	if !errors.Is(err, ErrNotVerified) {
+		t.Errorf("err = %v, want ErrNotVerified", err)
+	}
+	for _, want := range []string{"6 bytes", "1 done todo", `"diff a"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %s", err.Error(), want)
+		}
+	}
+}
+
+// TestMergeVerifierErrorDetail: a verifier crash must reach the caller with
+// the underlying cause attached, not as a bare sentinel.
+func TestMergeVerifierErrorDetail(t *testing.T) {
+	plan := &Plan{ID: "p", Todos: []Todo{
+		{ID: "a", Status: Done, Artifacts: []string{"f1.go"}},
+	}}
+	diffs := map[string]string{"a": "diff a"}
+	_, err := Merge(context.Background(), plan, diffs, errVerifier{})
+	if err == nil {
+		t.Fatalf("Merge: want verifier crash propagated, got nil")
+	}
+	if !strings.Contains(err.Error(), "verifier crashed") {
+		t.Errorf("err = %q, want the underlying verifier error", err.Error())
+	}
+}
+
 // TestMergeSummary: the MergedPatch carries a summary with the done/failed
 // counts per todo (File 12 §12.6 status table).
 func TestMergeSummary(t *testing.T) {
@@ -162,5 +250,37 @@ func TestMergeSummary(t *testing.T) {
 	}
 	if mp.Summary.Done != 1 || mp.Summary.Failed != 1 {
 		t.Errorf("Summary = {Done:%d Failed:%d}, want {1,1}", mp.Summary.Done, mp.Summary.Failed)
+	}
+}
+
+// TestMergedReportsTheDiffNotTheTodoCount pins what plan.done's Merged field
+// means. It used to answer Summary.Done > 0 — "some todo finished" — which is
+// not the same question. Coders that finish without emitting a diff are the
+// normal case today (withPatches is unwired, so every coder emits ""), and the
+// old answer announced a successful merge over zero bytes. Merged must describe
+// the patch.
+func TestMergedReportsTheDiffNotTheTodoCount(t *testing.T) {
+	plan := &Plan{ID: "p", Todos: []Todo{{ID: "a", Status: Done, Artifacts: []string{"f1.go"}}}}
+
+	// A done todo that produced no diff: merged nothing.
+	empty, err := Merge(context.Background(), plan, map[string]string{}, fakeVerifier{pass: true})
+	if err != nil {
+		t.Fatalf("Merge (no diffs): %v", err)
+	}
+	if empty.Summary.Done != 1 {
+		t.Fatalf("Summary.Done = %d, want 1 — the premise of this test is a done todo", empty.Summary.Done)
+	}
+	if empty.Merged() {
+		t.Errorf("Merged() = true over a %d-byte diff: it is reporting the todo count, not the patch",
+			len(empty.CombinedDiff))
+	}
+
+	// The same todo with a real diff: merged something.
+	full, err := Merge(context.Background(), plan, map[string]string{"a": "diff a"}, fakeVerifier{pass: true})
+	if err != nil {
+		t.Fatalf("Merge (with diff): %v", err)
+	}
+	if !full.Merged() {
+		t.Errorf("Merged() = false for a %d-byte combined diff", len(full.CombinedDiff))
 	}
 }

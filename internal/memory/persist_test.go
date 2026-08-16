@@ -9,6 +9,11 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +125,195 @@ func TestOpenWithNoPriorDataStartsEmpty(t *testing.T) {
 	defer s.Close()
 	if got, err := s.Preferences().All(context.Background()); err != nil || len(got) != 0 {
 		t.Errorf("fresh prefs = %v (err %v), want empty", got, err)
+	}
+}
+
+// TestCloseFlushesUnfinishedWork (§11.3.3): the listener only persists on
+// task.completed, so a session that ends any other way — Ctrl-C, a crash, a
+// task still in flight — used to write nothing at all. Close must flush the
+// durable sub-stores so what the agent learned survives into the next launch.
+func TestCloseFlushesUnfinishedWork(t *testing.T) {
+	dir := t.TempDir()
+
+	a, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open A: %v", err)
+	}
+	ctx := context.Background()
+	a.Conversation().AppendAssistant(ctx, "s_1", Message{Role: RoleAssistant, Text: "unfinished reply"})
+	a.ExecHistory().Append(ctx, "s_1", ExecEntry{Kind: "tool", Summary: "grep"})
+	a.Insights().Record(ctx, "prefer table-driven tests", "verify.pass")
+	// No task.completed — the session just ends.
+	if err := a.Close(); err != nil {
+		t.Fatalf("Close A: %v", err)
+	}
+
+	b, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open B: %v", err)
+	}
+	defer b.Close()
+	if got := b.Insights().All(); len(got) != 1 || got[0].Text != "prefer table-driven tests" {
+		t.Errorf("insights after restart = %+v, want the one recorded before Close", got)
+	}
+	if err := b.Conversation().Load(ctx, "s_1"); err != nil {
+		t.Fatalf("Conversation Load: %v", err)
+	}
+	if got := b.Conversation().Messages("s_1"); len(got) != 1 || got[0].Text != "unfinished reply" {
+		t.Errorf("conversation after restart = %+v, want the unflushed reply", got)
+	}
+	if err := b.ExecHistory().Load(ctx, "s_1"); err != nil {
+		t.Fatalf("ExecHistory Load: %v", err)
+	}
+	if got := b.ExecHistory().Entries("s_1"); len(got) != 1 || got[0].Summary != "grep" {
+		t.Errorf("exec history after restart = %+v, want the unflushed entry", got)
+	}
+}
+
+// TestFlushIsCallableMidSession: Flush is the explicit checkpoint the
+// composition root can call without closing the store (a long task shouldn't
+// have to end for its memory to become durable).
+func TestFlushIsCallableMidSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	s.Insights().Record(ctx, "the build is quadratic", "verify.fail")
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	// The file is on disk NOW — a second store reading the same root sees it
+	// while the first is still open.
+	other, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open other: %v", err)
+	}
+	defer other.Close()
+	if got := other.Insights().All(); len(got) != 1 {
+		t.Errorf("insights after Flush = %+v, want 1 (Flush didn't reach disk)", got)
+	}
+}
+
+// TestWriteJSONIsAtomic: a save must never expose a half-written file. The old
+// writeJSON went through os.WriteFile, which truncates the target and then
+// streams the bytes, so a crash — or, as here, a concurrent reader — could see
+// a truncated file where a valid one used to be. A temp-file + rename leaves
+// the reader with the old contents or the new ones, never a mix.
+func TestWriteJSONIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.json")
+
+	// A payload large enough that a single non-atomic write is observably
+	// non-instant (a few MiB of JSON).
+	payload := make([]string, 20000)
+	for i := range payload {
+		payload[i] = strings.Repeat("x", 200)
+	}
+	if err := writeJSON(path, payload); err != nil {
+		t.Fatalf("seed writeJSON: %v", err)
+	}
+
+	const rounds = 20
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < rounds; i++ {
+			if err := writeJSON(path, payload); err != nil {
+				t.Errorf("writeJSON: %v", err)
+				return
+			}
+		}
+	}()
+
+	torn := 0
+	for {
+		select {
+		case <-done:
+			if torn > 0 {
+				t.Errorf("%d concurrent reads saw a torn file — the save is not atomic", torn)
+			}
+			return
+		default:
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // a missing file is fine; a torn one is not
+		}
+		var out []string
+		if json.Unmarshal(data, &out) != nil || len(out) != len(payload) {
+			torn++
+		}
+	}
+}
+
+// TestOpenWithCorruptStoreFileIsNonFatal: a truncated or hand-mangled store
+// file must not kill the agent and must not be silently overwritten. Open
+// starts empty, reports the problem through Warnings, and moves the bytes
+// aside as <name>.corrupt so they can still be recovered.
+func TestOpenWithCorruptStoreFileIsNonFatal(t *testing.T) {
+	dir := t.TempDir()
+	// A truncated write: valid JSON prefix, no closing bracket.
+	const truncated = `[{"text":"half a lesso`
+	if err := os.WriteFile(filepath.Join(dir, "knowledge.json"), []byte(truncated), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "preference.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open with corrupt files returned an error (want non-fatal): %v", err)
+	}
+	defer s.Close()
+
+	warns := s.Warnings()
+	if len(warns) < 2 {
+		t.Errorf("Warnings() = %v, want one per corrupt file", warns)
+	}
+	for _, w := range warns {
+		var ce *CorruptError
+		if !errors.As(w, &ce) {
+			t.Errorf("warning %v is not a *CorruptError", w)
+		}
+	}
+	// The stores start empty rather than half-loaded.
+	if got := s.Insights().All(); len(got) != 0 {
+		t.Errorf("insights after corrupt load = %+v, want empty", got)
+	}
+	if got, _ := s.Preferences().All(context.Background()); len(got) != 0 {
+		t.Errorf("prefs after corrupt load = %v, want empty", got)
+	}
+	// No silent wipe: the original bytes are still on disk, moved aside.
+	kept, err := os.ReadFile(filepath.Join(dir, "knowledge.json.corrupt"))
+	if err != nil {
+		t.Fatalf("corrupt knowledge.json was not preserved: %v", err)
+	}
+	if string(kept) != truncated {
+		t.Errorf("quarantined bytes = %q, want the original %q", kept, truncated)
+	}
+}
+
+// TestOpenThenFlushOnAFreshRootWritesNothingSurprising: first run — no files
+// exist, Open must not error, and Flush must create only the stores that have
+// content (a missing file on first launch is "nothing remembered yet").
+func TestFirstRunWithNoFilesLoadsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(Deps{Root: dir})
+	if err != nil {
+		t.Fatalf("Open on a fresh root: %v", err)
+	}
+	defer s.Close()
+	if w := s.Warnings(); len(w) != 0 {
+		t.Errorf("Warnings on a fresh root = %v, want none (a missing file is not corruption)", w)
+	}
+	if got := s.Insights().All(); len(got) != 0 {
+		t.Errorf("insights on a fresh root = %+v, want empty", got)
+	}
+	if err := s.Flush(context.Background()); err != nil {
+		t.Errorf("Flush on a fresh root: %v", err)
 	}
 }

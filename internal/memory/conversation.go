@@ -15,7 +15,9 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 )
@@ -95,6 +97,27 @@ func (s *ConversationStore) Persist(_ context.Context, sid string) error {
 		c = &Conversation{}
 	}
 	return writeJSON(s.path(sid), c)
+}
+
+// persistAll writes every cached session's conversation. Store.Flush calls it
+// on shutdown/checkpoint; the per-session Persist stays the listener's path.
+// Sessions are written in sorted order (S5) and one failure doesn't stop the
+// rest — the errors are joined.
+func (s *ConversationStore) persistAll(ctx context.Context) error {
+	s.mu.Lock()
+	sids := make([]string, 0, len(s.sess))
+	for sid := range s.sess {
+		sids = append(sids, sid)
+	}
+	s.mu.Unlock()
+	sort.Strings(sids)
+	var errs []error
+	for _, sid := range sids {
+		if err := s.Persist(ctx, sid); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Load re-reads the session's conversation file into the warm cache.

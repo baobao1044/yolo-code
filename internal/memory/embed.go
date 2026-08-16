@@ -1,18 +1,19 @@
-// The deterministic local Embedder (File 11 §11.7.4) — a hash-based term-
-// frequency embedder so the vector store is offline-testable with zero deps.
-// A real OpenAI/Ollama embedder plugs behind the same Embedder interface later;
-// the MVP default keeps no code leaving the machine (air-gapped audience,
-// File 01 §1.3.3).
+// The default Embedder (File 11 §11.7.4). It is a hashing vectorizer, NOT an
+// embedding model: each token is hashed (FNV-1a) into one of `dim` buckets and
+// increments it, so the output is a hashed bag-of-words term-frequency vector.
+// Cosine over two such vectors measures how many literal tokens two texts
+// share — the classic lexical similarity, the same family as tf-idf, with none
+// of the meaning an embedding model would carry. "Refactor this loop" and
+// "rewrite the iteration" score 0 against each other here.
 //
-// Strategy: each token in the text is hashed (FNV-1a) into one of `dim` buckets
-// and accumulates into that dimension (term-frequency hashing). This gives:
+// Calling it an embedder is a shape claim, not a quality claim. What it buys:
 // - determinism (S5): the same text → the same vector across runs.
 // - discrimination: distinct term profiles → distinct vectors.
 // - a fixed dimension (so cosine is comparable across chunks).
-// It is NOT a quality embedding (no semantics, no context) — it's a stable
-// shape the cosine/top-k machinery is tested against. The chunking + retrieval
-// logic is the real test target; embedding quality isn't (the hosted embedder
-// swaps in behind the interface).
+// - zero deps and nothing leaving the machine (air-gapped audience, §1.3.3).
+// What it does not buy: synonymy, paraphrase, or any notion of meaning. A real
+// OpenAI/Ollama embedder plugs in behind the Embedder interface (Deps.Embedder)
+// and everything downstream — chunking, cosine, top-k, eviction — is unchanged.
 
 package memory
 
@@ -22,16 +23,19 @@ import (
 	"strings"
 )
 
-// hashEmbedder is the deterministic local Embedder. dim is the fixed vector
-// dimension (the same across all chunks so cosine is comparable).
+// hashEmbedder is the default Embedder: a hashing term-frequency vectorizer.
+// dim is the fixed bucket count (the same across all chunks so cosine is
+// comparable); collisions between distinct tokens are expected and are the
+// price of a fixed dimension.
 type hashEmbedder struct {
 	dim int
 }
 
-// NewHashEmbedder returns a deterministic hash-based embedder over a fixed
-// `dim`-dimensional space. dim must be > 0. The spec's §11.6.2 range is 384–768;
-// the project default (memory.Open when no Embedder is injected) is 384 — the
-// air-gapped MVP floor.
+// NewHashEmbedder returns the hashing term-frequency vectorizer over a fixed
+// `dim`-dimensional space — lexical similarity, not semantic (see the file
+// header). dim must be > 0. The spec's §11.6.2 range is 384–768; the project
+// default (memory.Open when no Embedder is injected) is 384 — the air-gapped
+// MVP floor.
 func NewHashEmbedder(dim int) Embedder {
 	if dim <= 0 {
 		dim = 384
@@ -41,8 +45,9 @@ func NewHashEmbedder(dim int) Embedder {
 
 // Embed returns one vector per input text, in order. Each text is tokenized on
 // whitespace + punctuation, and each token's FNV-1a hash picks a bucket that
-// accumulates +1 (term frequency). An empty/whitespace-only text yields the
-// zero vector (a valid vector; cosine with it is 0).
+// accumulates +1 (term frequency). Two texts therefore only score against each
+// other to the extent they share literal tokens. An empty/whitespace-only text
+// yields the zero vector (a valid vector; cosine with it is 0).
 func (e *hashEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	for i, text := range texts {

@@ -104,6 +104,24 @@ func TestBudgetCheckUnknownTask(t *testing.T) {
 	}
 }
 
+// TestBudgetRegisteredButUncappedProceeds is the gap between the two cases
+// above: the ledger DID register the task, so ok is true, but no wall-clock cap
+// was configured, so the deadline is the zero time. Comparing against it
+// directly makes time.Now().Before(deadline) false — the zero time is in the
+// year 1 — and the orchestrator would refuse the first dispatch of every plan
+// on a budget nobody set. ok reports that NewTask ran, not that a deadline
+// exists, so it cannot carry this distinction on its own.
+//
+// infra.Cost used to stamp time.Now().Add(0) here, which produced the same
+// refusal by a different route; both halves are now guarded.
+func TestBudgetRegisteredButUncappedProceeds(t *testing.T) {
+	ledger := &fakeCostLedger{deadlineIsSet: true} // registered, deadline zero
+	b := NewBudget(event.TaskID("plan_1"), ledger)
+	if !b.CheckBeforeDispatch() {
+		t.Error("CheckBeforeDispatch = false on a registered task with no deadline, want true — an unset cap is off, not already elapsed")
+	}
+}
+
 // TestBudgetEndTask: End calls the ledger's EndTask exactly once.
 func TestBudgetEndTask(t *testing.T) {
 	ledger := &fakeCostLedger{}

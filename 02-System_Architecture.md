@@ -175,6 +175,14 @@ tui.Run(ctx, core) error
 | 12 | Infrastructure | `internal/infra` | **OpenTelemetry Go SDK**, **Sentry Go SDK** |
 | – | TUI | `internal/tui` | `bubbletea`, `lipgloss`, `bubbles` |
 
+> **The third column is the design target, not `go.mod`.** The shipped binary
+> depends on `bubbletea`/`lipgloss`/`bubbles` and the standard library, nothing
+> else: SQLite is a JSON file, tree-sitter is `go/parser`, the OTel and Sentry
+> SDKs are stdlib stubs, and L10's "vector store, embedder" is a lexical
+> retrieval index over a hashed term-frequency vectorizer (File 11 §11.6). Each
+> of those is a named interface seam, so the real library swaps in without
+> touching callers — but none of them is wired today.
+
 ---
 
 ## 2.2 Data Flow

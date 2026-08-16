@@ -77,9 +77,17 @@ type Issue struct {
 // StageResult is one stage's verdict (File 09 §9.4/§9.6): the stage, its
 // status, a one-line detail, and the structured issues it found. L8-001's
 // pipeline returns a slice of these — one per stage that ran, in order.
+//
+// Cached separates the two kinds of SevSkip. A plain skip measured nothing (no
+// tool for the language, not required by the policy, no files); a cached skip
+// (L8-005) is a *re-used* measurement — the file's content hash matched a
+// previous pass. The engine's no-signal rule counts the second as verification
+// signal and the first as none, so a re-verify of unchanged files still
+// certifies while an empty run doesn't.
 type StageResult struct {
 	Stage  Stage
 	Status Severity
 	Detail string
 	Issues []Issue
+	Cached bool
 }

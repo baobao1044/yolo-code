@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // fakeRunner is an in-memory Runner: it dispatches on (name, args) via a
@@ -21,14 +22,60 @@ type fakeRunner struct {
 	calls []fakeCall
 }
 
+// fakeCall records one Runner invocation. ctx is kept as well as the command:
+// a stage that manufactures its own context.Background() instead of forwarding
+// the caller's is invisible in the verdict but obvious here, so the cancellation
+// and per-stage-timeout wiring have something to assert against.
 type fakeCall struct {
+	ctx  context.Context
 	name string
 	args []string
 }
 
-func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (string, string, int, error) {
-	r.calls = append(r.calls, fakeCall{name: name, args: append([]string(nil), args...)})
+func (r *fakeRunner) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
+	r.calls = append(r.calls, fakeCall{ctx: ctx, name: name, args: append([]string(nil), args...)})
 	return r.fn(name, args)
+}
+
+// blockingRunner models the one thing a real `go test` does that the instant
+// fake cannot: it keeps running until its context ends.
+//
+// testStage decides the cap fired by reading runCtx.Err() the moment the runner
+// returns, so with an instant runner the answer is a race against the runtime's
+// timer goroutine rather than a property of the stage. A one-nanosecond cap won
+// that race on Linux and lost it on Windows, whose timers round up to the
+// millisecond — the test then asserted the cap had fired when nothing had, and
+// it would have kept passing on Linux if the cap had been removed from the
+// stage entirely. Waiting on ctx.Done() makes the deadline the cause of the
+// return instead of a bet on scheduling.
+type blockingRunner struct{ calls []fakeCall }
+
+func (r *blockingRunner) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
+	r.calls = append(r.calls, fakeCall{ctx: ctx, name: name, args: append([]string(nil), args...)})
+	if name == "go" && len(args) > 0 && args[0] == "test" {
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			// Unreachable while the cap works. It is here so a regression that
+			// stops applying the cap fails the test on its assertions rather
+			// than wedging the whole package until the go test binary timeout.
+		}
+	}
+	return "", "", 0, nil
+}
+
+// callFor returns the recorded invocation of `name sub` (e.g. "go build"), or
+// nil if the stage never ran it.
+func callFor(calls []fakeCall, name, sub string) *fakeCall {
+	for i, c := range calls {
+		if c.name != name {
+			continue
+		}
+		if sub == "" || (len(c.args) > 0 && c.args[0] == sub) {
+			return &calls[i]
+		}
+	}
+	return nil
 }
 
 // fakeFS is an in-memory FS: Read returns the stored content or an error.
@@ -70,7 +117,7 @@ func TestPipelineRunsAllStagesInOrder(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	wantOrder := []Stage{StageAST, StageFormat, StageLint, StageTypeCheck, StageBuild, StageTest, StagePolicy}
 	if len(res) != len(wantOrder) {
@@ -97,7 +144,7 @@ func TestPipelineShortCircuitsOnFail(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	// Expect AST(pass), Format(pass), Lint(fail) — then short-circuit.
 	if len(res) != 3 {
@@ -118,7 +165,7 @@ func TestASTStageFailsOnBrokenSyntax(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {\n"} // missing close brace
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	if res[0].Stage != StageAST || res[0].Status != SevFail {
 		t.Fatalf("AST = %s/%s, want fail", res[0].Stage, res[0].Status)
@@ -138,7 +185,7 @@ func TestASTStageAcceptsUnknownExtension(t *testing.T) {
 	fs := fakeFS{"README.md": "# broken markdown (((\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"README.md"})
+	res := p.Run(context.Background(), []string{"README.md"}, Policy{})
 
 	if res[0].Stage != StageAST || res[0].Status != SevPass {
 		t.Errorf("AST(.md) = %s/%s, want pass (unknown extension skipped)", res[0].Stage, res[0].Status)
@@ -157,7 +204,7 @@ func TestFormatStageWarnsOnMismatch(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	if res[1].Stage != StageFormat || res[1].Status != SevWarn {
 		t.Errorf("Format = %s/%s, want warn (unformatted)", res[1].Stage, res[1].Status)
@@ -178,7 +225,7 @@ func TestLintStageFailsOnVetError(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	if res[2].Stage != StageLint || res[2].Status != SevFail {
 		t.Fatalf("Lint = %s/%s, want fail", res[2].Stage, res[2].Status)
@@ -200,7 +247,7 @@ func TestBuildStageFailsOnCompileError(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	// AST(pass) Format(pass) Lint(pass) TypeCheck(fail) — short-circuit.
 	if len(res) != 4 {
@@ -225,7 +272,7 @@ func TestTestStageFailsOnTestFailure(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: r, FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	// All 7 stages run; the last-but-one (Test) fails — Policy still runs?
 	// No: a fail short-circuits, so Policy does NOT run after a Test fail.
@@ -241,7 +288,7 @@ func TestPolicyStageBlocksVendorEdits(t *testing.T) {
 	fs := fakeFS{"vendor/pkg/x.go": "package pkg\n\nfunc X() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"vendor/pkg/x.go"})
+	res := p.Run(context.Background(), []string{"vendor/pkg/x.go"}, Policy{})
 
 	// Policy is the last stage; a vendor edit is a hard fail.
 	if len(res) != 7 {
@@ -266,7 +313,7 @@ func TestPolicyStageWarnsOnTodoWithoutOwner(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n// TODO fix this\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	pol := res[6]
 	if pol.Stage != StagePolicy {
@@ -290,9 +337,186 @@ func TestPolicyStagePassesCleanFiles(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs})
 
-	res := p.Run(context.Background(), []string{"a.go"})
+	res := p.Run(context.Background(), []string{"a.go"}, Policy{})
 
 	if res[6].Stage != StagePolicy || res[6].Status != SevPass {
 		t.Errorf("Policy = %s/%s, want pass (clean file)", res[6].Stage, res[6].Status)
+	}
+}
+
+// --- context + policy threading ---------------------------------------------
+
+// ctxProbeKey tags a caller's context so a test can prove a stage forwarded it
+// rather than manufacturing a fresh context.Background().
+type ctxProbeKey struct{}
+
+func TestBuildStagesForwardCallerContext(t *testing.T) {
+	// The TypeCheck and Build stages both shell out via buildCmd. buildCmd used
+	// to call r.Run(context.Background(), ...), so a cancelled task context
+	// never reached the compiler: the real runner uses osexec.CommandContext,
+	// so those `go build` processes kept compiling after the runtime had
+	// already reported the task cancelled. Every command a stage runs must
+	// carry the caller's ctx.
+	r := passRunner()
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxProbeKey{}, "caller"))
+	cancel() // already cancelled: the runner should see a dead context
+
+	e.Verify(ctx, Change{Task: "t_ctx", Files: []string{"a.go"}}, fullPolicy())
+
+	build := callFor(r.calls, "go", "build")
+	if build == nil {
+		t.Fatal("go build never ran; the test can't observe the context it was given")
+	}
+	if build.ctx.Value(ctxProbeKey{}) != "caller" {
+		t.Errorf("go build ctx value = %v, want %q (stage manufactured its own context)", build.ctx.Value(ctxProbeKey{}), "caller")
+	}
+	if build.ctx.Err() == nil {
+		t.Error("go build ctx is live after the caller cancelled; Ctrl-C can't kill the compiler")
+	}
+	// And the rest of the chain, which already forwarded ctx, still does.
+	for _, c := range []struct{ name, sub string }{{"gofmt", ""}, {"go", "vet"}, {"go", "test"}} {
+		got := callFor(r.calls, c.name, c.sub)
+		if got == nil {
+			t.Errorf("%s %s never ran", c.name, c.sub)
+			continue
+		}
+		if got.ctx.Err() == nil {
+			t.Errorf("%s %s ctx is live after the caller cancelled", c.name, c.sub)
+		}
+	}
+}
+
+func TestTestTimeoutCapsTheTestStageOnly(t *testing.T) {
+	// Policy.TestTimeout was plumbed through four layers and read by nobody, so
+	// the documented 30s cap did not exist. A non-zero timeout must put a
+	// deadline on the `go test` context — and only that one; the other stages
+	// keep the caller's context unchanged.
+	r := passRunner()
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	pol := fullPolicy()
+	pol.TestTimeout = 30 * time.Second
+	v := e.Verify(context.Background(), Change{Task: "t_to", Files: []string{"a.go"}}, pol)
+
+	if !v.Pass {
+		t.Fatalf("Verdict = %+v, want pass (a generous cap changes nothing)", v)
+	}
+	test := callFor(r.calls, "go", "test")
+	if test == nil {
+		t.Fatal("go test never ran")
+	}
+	dl, ok := test.ctx.Deadline()
+	if !ok {
+		t.Fatal("go test ctx has no deadline; Policy.TestTimeout is not wired (a hung `go test` hangs verification forever)")
+	}
+	if until := time.Until(dl); until <= 0 || until > 30*time.Second {
+		t.Errorf("go test deadline is %v away, want (0, 30s]", until)
+	}
+	if build := callFor(r.calls, "go", "build"); build != nil {
+		if _, ok := build.ctx.Deadline(); ok {
+			t.Error("go build inherited the test timeout; the cap is the test stage's")
+		}
+	}
+}
+
+func TestZeroTestTimeoutMeansNoCap(t *testing.T) {
+	// The zero value must mean "no cap", never "a deadline that already
+	// expired". A policy that leaves TestTimeout unset behaves exactly as it
+	// did before the field was wired.
+	r := passRunner()
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	pol := fullPolicy()
+	pol.TestTimeout = 0
+	v := e.Verify(context.Background(), Change{Task: "t_zero", Files: []string{"a.go"}}, pol)
+
+	if !v.Pass || v.Severity != SevPass {
+		t.Fatalf("Verdict = %+v, want a clean pass (zero timeout must not expire anything)", v)
+	}
+	test := callFor(r.calls, "go", "test")
+	if test == nil {
+		t.Fatal("go test never ran with TestTimeout=0")
+	}
+	if dl, ok := test.ctx.Deadline(); ok {
+		t.Errorf("go test ctx has deadline %v with TestTimeout=0, want none", dl)
+	}
+}
+
+func TestTestTimeoutExceededIsAWarningNotAPass(t *testing.T) {
+	// A cap that fires is recorded as a warning (§9.3.6: a slow machine
+	// shouldn't veto a correct patch) — but it must be *recorded*. Before the
+	// fix the stage reported a clean pass no matter how long the tests took.
+	r := &blockingRunner{}
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	pol := fullPolicy()
+	pol.TestTimeout = 10 * time.Millisecond
+	v := e.Verify(context.Background(), Change{Task: "t_slow", Files: []string{"a.go"}}, pol)
+
+	if v.Severity != SevWarn {
+		t.Fatalf("Severity = %s, want warn (the test cap fired): %+v", v.Severity, v)
+	}
+	if len(v.Warnings) == 0 {
+		t.Fatal("Warnings empty; the timeout left no trace on the Verdict")
+	}
+	if !v.Pass {
+		t.Errorf("Pass = false; §9.3.6 makes a test timeout a warning, not a veto: %+v", v)
+	}
+}
+
+func TestLintLevelWarningFailsOnDiagnostics(t *testing.T) {
+	// LintLevel "warning" is the strict level: any lint output fails, not just
+	// a non-zero exit. The field was never read, so a strict policy silently
+	// got lenient lint.
+	r := &fakeRunner{fn: func(name string, args []string) (string, string, int, error) {
+		if name == "go" && len(args) > 0 && args[0] == "vet" {
+			return "", "a.go:3: composite literal uses unkeyed fields\n", 0, nil // exit 0!
+		}
+		return "", "", 0, nil
+	}}
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	pol := fullPolicy()
+	pol.LintLevel = "warning"
+	v := e.Verify(context.Background(), Change{Task: "t_strict", Files: []string{"a.go"}}, pol)
+
+	if v.Pass {
+		t.Fatalf("Verdict passed with vet diagnostics at LintLevel=warning: %+v", v)
+	}
+	if v.Stage != StageLint {
+		t.Errorf("Stage = %s, want lint", v.Stage)
+	}
+	if len(v.Errors) == 0 {
+		t.Error("Errors empty, want the vet diagnostic")
+	}
+}
+
+func TestLintLevelErrorRecordsDiagnosticsAsWarnings(t *testing.T) {
+	// The lenient level ("error", the default) does not fail on diagnostics the
+	// tool itself let through — but it records them rather than dropping them.
+	r := &fakeRunner{fn: func(name string, args []string) (string, string, int, error) {
+		if name == "go" && len(args) > 0 && args[0] == "vet" {
+			return "", "a.go:3: composite literal uses unkeyed fields\n", 0, nil
+		}
+		return "", "", 0, nil
+	}}
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: r, FS: fs})
+
+	pol := fullPolicy() // LintLevel: "error"
+	v := e.Verify(context.Background(), Change{Task: "t_lenient", Files: []string{"a.go"}}, pol)
+
+	if !v.Pass {
+		t.Fatalf("Verdict failed at LintLevel=error on a non-fatal diagnostic: %+v", v)
+	}
+	if len(v.Warnings) == 0 {
+		t.Error("Warnings empty; the vet diagnostic was dropped on the floor")
 	}
 }

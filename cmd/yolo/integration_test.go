@@ -24,6 +24,11 @@ import (
 // TestRegressionPatchVerifyFailRollsBack drives a real headless run through
 // PLAN → EXECUTE (patch) → VERIFY (AST fail) → RESTORE → CANCELLED.
 func TestRegressionPatchVerifyFailRollsBack(t *testing.T) {
+	// patch is a high-risk write and parks on the HITL gate. This test is
+	// about rollback, not the gate, and there is no human here — opt the
+	// class out so the patch reaches the verifier.
+	t.Setenv("YOLO_AUTO_APPROVE_HIGH", "true")
+
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -39,6 +44,9 @@ func TestRegressionPatchVerifyFailRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The run below rolls the patch back out of this tree, so the delete has to
+	// wait for the end of the test — which is exactly when t.Cleanup fires.
+	t.Cleanup(func() { _ = snap.close() })
 	cp := newShadowCheckpointer(snap)
 	patchEng := newPatchEngine(sandbox, cp, bus)
 	execAd := &execAdapter{engine: eng, patcher: patchEng}

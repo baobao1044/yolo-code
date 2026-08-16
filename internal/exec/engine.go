@@ -147,7 +147,12 @@ func (e *Engine) Dispatch(ctx context.Context, call ToolCall) (Observation, erro
 	if risk == RiskCritical {
 		return obsErr(call), fmt.Errorf("tool %q denied: critical risk (explicitly denied)", call.Tool)
 	}
-	if riskLevel(risk) >= riskLevel(RiskMedium) && !e.config.AutoApprove[risk] {
+	// call.PreApproved means a gate in front of this one already put the
+	// question to a human and got a yes for this exact call, so asking again
+	// would make the user answer twice for one action. It skips the prompt,
+	// never the critical-risk denial above: pre-approval is permission to run a
+	// gated tool, not permission to run a forbidden one.
+	if riskLevel(risk) >= riskLevel(RiskMedium) && !e.config.AutoApprove[risk] && !call.PreApproved {
 		if err := e.requestApproval(ctx, call, risk, tool); err != nil {
 			return obsErr(call), err
 		}
@@ -184,6 +189,22 @@ func (e *Engine) NeedsApproval(call ToolCall) bool {
 		return false
 	}
 	return !e.config.AutoApprove[risk]
+}
+
+// RiskOf reports the risk class a call would be dispatched under, so a gate in
+// front of the engine can name it in the question it asks. An unregistered tool
+// reports RiskLow, matching NeedsApproval: Dispatch rejects it on the registry
+// lookup before any risk classification happens, so there is no class to state.
+//
+// This exists because the layer that prompts is not the layer that classifies.
+// Without it the runtime's approval.request goes out with an empty Risk and the
+// user is asked to approve something with no indication of how dangerous it is.
+func (e *Engine) RiskOf(call ToolCall) event.Risk {
+	tool, ok := e.registry.Get(call.Tool)
+	if !ok {
+		return RiskLow
+	}
+	return tool.Risk(call)
 }
 
 // requestApproval publishes an ApprovalRequestEvent and blocks until the user
@@ -308,6 +329,9 @@ func (passthroughNormalizer) Normalize(out ToolOutput, _ Metadata) Observation {
 		Summary:  out.Summary,
 		Bytes:    len(out.Stdout) + len(out.Stderr),
 		Files:    out.Files,
+		// Carried even by the passthrough default: a normalizer that drops this
+		// turns "the detector could not keep up" back into "nothing changed".
+		FilesUnknown: out.FilesUnknown,
 	}
 }
 

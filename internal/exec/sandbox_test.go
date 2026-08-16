@@ -27,7 +27,21 @@ func newSandbox(t *testing.T) *Sandbox {
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &Sandbox{root: root, cwd: root}
+	// Through NewSandbox, not a struct literal. Production has exactly one
+	// constructor and it normalizes root and cwd through EvalSymlinks, so a
+	// literal builds a Sandbox in a state production can never produce — and
+	// then every assertion below is about that fiction.
+	//
+	// It is not hypothetical. On macOS t.TempDir() hands back a path under
+	// /var, which is a symlink to /private/var. Resolve flattens the path it is
+	// given and compares the result against root, so with an unnormalized root
+	// every single path read as an escape: five tests across this package failed
+	// on macos-latest and only there, for a reason that has nothing to do with
+	// what they were written to check. Worse, the tests that *expect* an escape
+	// kept passing — for entirely the wrong reason. `TMPDIR=<a symlink> go test
+	// ./internal/exec/` reproduces the whole thing on Linux; see
+	// TestSandboxRootReachedThroughASymlink for it pinned as a standing guard.
+	return NewSandbox(root, root)
 }
 
 func TestSandboxResolveRejectsEscape(t *testing.T) {
@@ -101,6 +115,67 @@ func TestSandboxResolveSymlinkEscape(t *testing.T) {
 	_, err := s.Resolve("escape.link")
 	if err == nil {
 		t.Fatal("Resolve(symlink → outside) = nil, want ErrPathEscapes")
+	}
+}
+
+func TestSandboxRootReachedThroughASymlink(t *testing.T) {
+	// A repo root reached through a symlink is ordinary, not exotic: macOS hands
+	// out /var/... tempdirs that are really /private/var/..., and plenty of Linux
+	// setups symlink a home or a mount point. Resolve flattens the path it is
+	// given and compares the result against s.root, so if root itself is left
+	// un-flattened the two sides can never match and *every* path inside the repo
+	// reads as an escape — the sandbox denies the whole repo it is guarding.
+	//
+	// NewSandbox is what prevents that, and this test is the only thing holding
+	// it there: delete either EvalSymlinks call in NewSandbox and this goes red
+	// on every platform, which is the point. The five macOS-only failures that
+	// prompted this test were the same defect, arriving by luck of the tempdir.
+	// Flatten the tempdir before building anything under it: on a host whose
+	// TMPDIR is itself a symlink (macOS always, Linux when TMPDIR says so) the
+	// want-values below would otherwise be spelled in un-flattened terms and the
+	// test would fail on its own expectations rather than on the sandbox.
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "realroot")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "inside.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		// Symlinks need elevated perms on some Windows setups; skip, don't fail.
+		t.Skipf("cannot create symlink on this host: %v", err)
+	}
+
+	s := NewSandbox(link, link)
+
+	// An existing file — confine's EvalSymlinks branch.
+	got, err := s.Resolve("inside.txt")
+	if err != nil {
+		t.Fatalf("Resolve(inside.txt) through a symlinked root = %v, want nil", err)
+	}
+	if want := filepath.Join(real, "inside.txt"); got != want {
+		t.Fatalf("Resolve(inside.txt) = %q, want %q (flattened to the real root)", got, want)
+	}
+
+	// A file that does not exist yet — containedPath's branch, a separate code
+	// path with the same exposure.
+	got, err = s.Resolve("not-yet.txt")
+	if err != nil {
+		t.Fatalf("Resolve(not-yet.txt) through a symlinked root = %v, want nil", err)
+	}
+	if want := filepath.Join(real, "not-yet.txt"); got != want {
+		t.Fatalf("Resolve(not-yet.txt) = %q, want %q", got, want)
+	}
+
+	// And confinement still holds — a test that only asserted the two lines
+	// above would also pass if someone "fixed" this by dropping the check.
+	if _, err := s.Resolve(filepath.Join(base, "sibling.txt")); err == nil {
+		t.Fatal("Resolve(path outside the symlinked root) = nil, want ErrPathEscapes")
 	}
 }
 

@@ -107,6 +107,13 @@ func (e *Engine) rank(parts []Part, req ContextRequest) []Scored {
 | Centrality | 0.15 | PageRank-style weight in the repo symbol graph |
 | Explicit | 0.10 | `@file`/`#issue` references in the user message |
 
+> **As shipped** (`internal/context/rank.go`): `semantic` is *token overlap*
+> between the goal and the part's text — the share of the goal's tokens that
+> appear in the part — not a vector cosine. `centrality` returns `0`; §6.2.3's
+> repo symbol graph does not exist yet, so the blend runs on four live signals.
+> RAG parts skip the blend entirely and keep the retrieval index's own cosine
+> score plus the explicit bonus.
+
 ### 6.2.3 Repository graph centrality
 The repository graph (built by tree-sitter, File 11) lets us ask "is this
 symbol on the hot path?" — a function called by many callers scores higher than

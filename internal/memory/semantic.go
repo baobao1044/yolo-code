@@ -1,12 +1,23 @@
-// Semantic memory (Vector RAG) — retrieve code by meaning, not by grep
-// (File 11 §11.6). The store embeds chunks via an Embedder, retrieves the top-k
-// by cosine similarity, and returns them budget-capped as Parts.
+// The code-chunk retrieval index (File 11 §11.6 calls this "Semantic Memory /
+// Vector RAG"). Read the name literally and you will be misled, so state it
+// plainly here: with the embedder this binary actually ships, retrieval is
+// LEXICAL, not semantic. The default Embedder (embed.go) hashes whitespace-
+// separated tokens into fixed buckets and counts them, so the "vector" is a
+// hashed bag of words and the cosine over it measures shared literal tokens.
+// A query and a chunk that mean the same thing in different words score zero.
+// There is no model, no learned representation, and nothing here understands
+// meaning — retrieve-by-meaning is what the interface is SHAPED for, not what
+// it currently does.
 //
-// stdlib-only: the MVP embedder is a deterministic local hash embedder (L10-003,
-// embed.go) so the store is offline-testable; a real OpenAI/Ollama embedder
-// plugs behind the Embedder interface (§11.7.4). The backing is in-memory for
-// L10-003; L10-005 adds JSON persistence, L10-004 adds chunking + reindex on
-// patch.applied.
+// The shape is the point: the store only ever talks to an Embedder (§11.7.4),
+// so dropping in a real OpenAI/Ollama embedder turns this into genuine
+// semantic search with no change below this line. Until then, treat it as a
+// hashed term-frequency index — better than nothing, weaker than grep with a
+// good regex, and honest about which.
+//
+// stdlib-only: the default embedder is deterministic and local (L10-003,
+// embed.go) so the store is offline-testable with zero deps. The backing is
+// in-memory; L10-004 adds chunking + reindex on patch.applied.
 //
 // Concurrency: single-writer is the listener goroutine (Invariant I1); a mutex
 // guards the chunks slice for safety if a multi-task scheduler shares the store.
@@ -41,13 +52,20 @@ type FS interface {
 	Read(ctx context.Context, path string) ([]byte, error)
 }
 
-// SemanticStore holds the embedded chunks and retrieves the top-k by cosine.
-// fs is the reindex reader (set by NewSemanticStoreWithFS); nil means Reindex
+// LexicalStore holds the embedded chunks and retrieves the top-k by cosine.
+// Named for what it does with the shipped embedder — lexical (hashed
+// term-frequency) similarity, not semantic similarity; see the file header.
+// It is reached through Store.Semantic(), which keeps the spec's §11.6 name.
+//
+// fs is the reindex reader (set by NewLexicalStoreWithFS); nil means Reindex
 // can't read a path's content (it's a no-op unless content is passed directly).
 // threshold is the minimum cosine similarity a chunk must reach to be returned
 // (§11.6.2 θ; default 0 → only non-positive similarities are filtered, matching
-// the original behavior).
-type SemanticStore struct {
+// the original behavior). Read SetThreshold before setting it: θ is specified
+// for a semantic embedder and this store ships a lexical one, so the spec's
+// number is not transferable and the plausible-looking values are the lethal
+// ones.
+type LexicalStore struct {
 	embed     Embedder
 	fs        FS
 	mu        sync.RWMutex
@@ -56,29 +74,41 @@ type SemanticStore struct {
 	threshold float64
 }
 
-// NewSemanticStore returns a store with no embedder (Retrieve returns nil —
-// kept for L10-001's aggregate wiring). Use NewSemanticStoreWith for a real
+// NewLexicalStore returns a store with no embedder (Retrieve returns nil —
+// kept for L10-001's aggregate wiring). Use NewLexicalStoreWith for a real
 // embedder.
-func NewSemanticStore() *SemanticStore { return &SemanticStore{} }
+func NewLexicalStore() *LexicalStore { return &LexicalStore{} }
 
-// NewSemanticStoreWith returns a store backed by the given embedder.
-func NewSemanticStoreWith(emb Embedder) *SemanticStore {
-	return &SemanticStore{embed: emb}
+// NewLexicalStoreWith returns a store backed by the given embedder.
+func NewLexicalStoreWith(emb Embedder) *LexicalStore {
+	return &LexicalStore{embed: emb}
 }
 
-// NewSemanticStoreWithFS returns a store backed by the given embedder + an FS
+// NewLexicalStoreWithFS returns a store backed by the given embedder + an FS
 // reader so Reindex can read a path's content on patch.applied (L10-004).
-func NewSemanticStoreWithFS(emb Embedder, fs FS) *SemanticStore {
-	return &SemanticStore{embed: emb, fs: fs}
+func NewLexicalStoreWithFS(emb Embedder, fs FS) *LexicalStore {
+	return &LexicalStore{embed: emb, fs: fs}
+}
+
+// embedder returns the store's embedder, installing the default hash embedder
+// on first use. The install is under the write lock: NewLexicalStore leaves
+// embed nil, so two concurrent inserts would otherwise both read-then-write
+// s.embed — a data race, and one of the two embedders is silently discarded
+// after chunks have been vectorised with it. Every insert path goes through
+// here.
+func (s *LexicalStore) embedder() Embedder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.embed == nil {
+		s.embed = NewHashEmbedder(384)
+	}
+	return s.embed
 }
 
 // addChunk embeds + appends a chunk. Test-visible (the L10-003 exit-bar test
 // seeds the store); production reindexing goes through Reindex (L10-004).
-func (s *SemanticStore) addChunk(_ context.Context, c chunkVec) {
-	if s.embed == nil {
-		s.embed = NewHashEmbedder(384)
-	}
-	vecs, _ := s.embed.Embed(context.Background(), []string{c.text})
+func (s *LexicalStore) addChunk(_ context.Context, c chunkVec) {
+	vecs, _ := s.embedder().Embed(context.Background(), []string{c.text})
 	if len(vecs) > 0 {
 		c.vector = vecs[0]
 	}
@@ -89,19 +119,26 @@ func (s *SemanticStore) addChunk(_ context.Context, c chunkVec) {
 	s.mu.Unlock()
 }
 
-// Retrieve returns the top-k chunks for a query, budget-capped (§11.6.2). It
-// embeds the query, scores every chunk by cosine, sorts descending, and
+// Retrieve returns the top-k chunks for a query, budget-capped (§11.6.2).
+// Ranking is by cosine over the Embedder's vectors — with the default embedder
+// that is shared-token overlap, so a query only matches chunks that literally
+// contain its words (see the file header). It embeds the query, scores every
+// chunk by cosine, sorts descending, and
 // returns up to `budget` Parts (one per hit, carrying path/name/kind in Attr
 // so the Context Engine can attribute the RAG hit). Chunks below the threshold
 // (§11.6.2 θ, default 0 → non-positive similarities filtered) are dropped. A
 // returned chunk's lastAccess is bumped so Evict's LRU order reflects recent
 // use. An empty store or a nil embedder returns nil.
-func (s *SemanticStore) Retrieve(ctx context.Context, query string, budget int) []Part {
-	if s.embed == nil || budget <= 0 {
+func (s *LexicalStore) Retrieve(ctx context.Context, query string, budget int) []Part {
+	if budget <= 0 {
 		return nil
 	}
+	// embed is read under the lock, not bare: an insert on another goroutine
+	// may be installing the default embedder right now. Retrieve does not
+	// install one — a store with no embedder has no chunks to rank anyway.
 	s.mu.RLock()
-	if len(s.chunks) == 0 {
+	emb := s.embed
+	if emb == nil || len(s.chunks) == 0 {
 		s.mu.RUnlock()
 		return nil
 	}
@@ -109,7 +146,7 @@ func (s *SemanticStore) Retrieve(ctx context.Context, query string, budget int) 
 	threshold := s.threshold
 	s.mu.RUnlock()
 
-	qvecs, _ := s.embed.Embed(ctx, []string{query})
+	qvecs, _ := emb.Embed(ctx, []string{query})
 	if len(qvecs) == 0 {
 		return nil
 	}
@@ -187,7 +224,7 @@ func (s *SemanticStore) Retrieve(ctx context.Context, query string, budget int) 
 // (the listener passes nil + relies on the FS). A nil content with no FS, or a
 // read failure, leaves the path de-indexed (its old chunks dropped) — a missing
 // file has nothing to index.
-func (s *SemanticStore) Reindex(ctx context.Context, path string, content []byte) {
+func (s *LexicalStore) Reindex(ctx context.Context, path string, content []byte) {
 	// Resolve content: explicit arg, else read via FS.
 	if content == nil && s.fs != nil {
 		var err error
@@ -200,11 +237,9 @@ func (s *SemanticStore) Reindex(ctx context.Context, path string, content []byte
 	// Chunk + embed OUTSIDE the lock (I/O + CPU work; no shared state touched).
 	chunks := ChunkFile(path, content)
 	var newVecs []chunkVec
-	if s.embed == nil {
-		s.embed = NewHashEmbedder(384)
-	}
+	emb := s.embedder()
 	for _, c := range chunks {
-		vecs, _ := s.embed.Embed(ctx, []string{c.Text})
+		vecs, _ := emb.Embed(ctx, []string{c.Text})
 		cv := chunkVec{path: c.Path, kind: c.Kind, name: c.Name, text: c.Text}
 		if len(vecs) > 0 {
 			cv.vector = vecs[0]
@@ -231,7 +266,7 @@ func (s *SemanticStore) Reindex(ctx context.Context, path string, content []byte
 }
 
 // Size returns the number of indexed chunks (§11.6.2). O(1).
-func (s *SemanticStore) Size() int {
+func (s *LexicalStore) Size() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.chunks)
@@ -239,7 +274,7 @@ func (s *SemanticStore) Size() int {
 
 // Delete removes the chunk with the given id (§11.6.2). A nonexistent id is a
 // no-op. Used by Evict and by explicit invalidation.
-func (s *SemanticStore) Delete(id int) {
+func (s *LexicalStore) Delete(id int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.chunks[:0]
@@ -255,7 +290,7 @@ func (s *SemanticStore) Delete(id int) {
 // `capacity` (§11.6.3). Chunks never retrieved (zero lastAccess) are evicted
 // first (oldest by insert order is the tiebreaker). A capacity <= 0 or one
 // already satisfied is a no-op.
-func (s *SemanticStore) Evict(capacity int) {
+func (s *LexicalStore) Evict(capacity int) {
 	if capacity <= 0 {
 		return
 	}
@@ -292,10 +327,34 @@ func (s *SemanticStore) Evict(capacity int) {
 }
 
 // SetThreshold sets the minimum cosine similarity a chunk must reach to be
-// returned by Retrieve (§11.6.2 θ). 0 (the default) keeps the original
-// "filter non-positive" behavior; a positive value (e.g. 0.7 from the spec)
-// drops low-similarity noise.
-func (s *SemanticStore) SetThreshold(theta float64) {
+// returned by Retrieve (§11.6.2 θ). 0 (the default) keeps the "filter
+// non-positive" behavior.
+//
+// Do not set this to 0.7 because §11.6.2 says 0.7. That sentence used to be in
+// this comment, phrased as a recommendation, and it is a trap: θ is specified
+// against a semantic embedder, and the shipped one (NewHashEmbedder — hashed
+// term frequency) produces cosines on a completely different scale. Measured
+// over this repo indexed at 40-line chunks, three realistic goals scored a
+// best-chunk cosine of 0.46, 0.33 and 0.16. Retrieve with a budget of 10
+// returned, per goal:
+//
+//	θ=0.0 → 10, 10, 10      θ=0.3 → 10,  2,  0
+//	θ=0.1 → 10, 10, 10      θ=0.5 →  0,  0,  0
+//	θ=0.2 → 10, 10,  0      θ=0.7 →  0,  0,  0
+//
+// So the spec's value is not a noise filter here, it is an off switch for
+// retrieval — and a silent one, because an empty result is indistinguishable
+// from an index that held nothing relevant. TestSpecThetaEmptiesLexicalRetrieval
+// pins that so the sentence cannot come back.
+//
+// θ=0.2 is the more interesting warning. It looks conservative and it still
+// zeroed the third goal outright while leaving the first at full budget. The
+// usable range is not just narrow, it is goal-dependent: absolute cosine has no
+// fixed meaning across queries on this embedder, so no single constant serves
+// them all. If low-quality hits need filtering, the instrument has to be
+// relative (a fraction of the top hit, say), not absolute — which is a design
+// decision, not a config value, and is why nothing in cmd/yolo calls this yet.
+func (s *LexicalStore) SetThreshold(theta float64) {
 	s.mu.Lock()
 	s.threshold = theta
 	s.mu.Unlock()

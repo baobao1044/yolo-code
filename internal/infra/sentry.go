@@ -57,7 +57,10 @@ func newSentry(cfg Config) *SentryHub {
 	}
 	// The real sentry.Init would run here; the stub succeeds unconditionally
 	// (no network). Fail-silent if a real init ever errors → return nil.
-	return &SentryHub{}
+	// Redaction on by default (same reasoning as newLogProjector): an
+	// un-Start'd hub used to capture raw extras. Start overwrites this with the
+	// aggregate's registry, which is the same value.
+	return &SentryHub{redactor: DefaultRedactor()}
 }
 
 // Report forwards an error-class event to the hub (§13.6.2). Non-error events

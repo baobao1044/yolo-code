@@ -40,13 +40,13 @@ func TestASTStageCachedOnUnchangedContent(t *testing.T) {
 	cache := NewFileCache()
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs, Cache: cache})
 
-	first := p.stages[0].Run(context.Background(), []string{"a.go"}) // astStage
+	first := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{}) // astStage
 	if first.Status != SevPass {
 		t.Fatalf("first AST run = %s, want pass", first.Status)
 	}
 	readsAfterFirst := fs.reads
 
-	second := p.stages[0].Run(context.Background(), []string{"a.go"})
+	second := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{})
 	if second.Status != SevSkip {
 		t.Fatalf("second AST run = %s, want skip (cache hit)", second.Status)
 	}
@@ -68,7 +68,7 @@ func TestASTCacheMissedWhenContentChanged(t *testing.T) {
 	cache := NewFileCache()
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs, Cache: cache})
 
-	first := p.stages[0].Run(context.Background(), []string{"a.go"})
+	first := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{})
 	if first.Status != SevPass {
 		t.Fatalf("first AST run = %s, want pass", first.Status)
 	}
@@ -76,28 +76,69 @@ func TestASTCacheMissedWhenContentChanged(t *testing.T) {
 	// Break the file (missing close brace). The hash differs → cache miss →
 	// re-validate → fail.
 	fs.inner["a.go"] = "package main\n\nfunc a() {\n"
-	second := p.stages[0].Run(context.Background(), []string{"a.go"})
+	second := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{})
 	if second.Status != SevFail {
 		t.Fatalf("second AST run = %s, want fail (changed content must re-validate)", second.Status)
 	}
 }
 
 func TestCacheKeyedOnStage(t *testing.T) {
-	// The cache is keyed by (path, stage, hash) — an AST cache entry must NOT
-	// satisfy a Policy-stage lookup. Two different stages over the same file
-	// both run their own logic the first time.
+	// The cache is keyed by (path, stage, hash), so a result filed under one
+	// stage must never satisfy another stage's lookup for the same bytes.
+	//
+	// This used to be asserted through the pipeline — run astStage, run
+	// policyStage, check both passed — which proved nothing: policyStage has no
+	// cache and never calls Lookup, so the assertion held with `stage` deleted
+	// from cacheKey entirely. The claim is about the key, so it is tested
+	// against the key.
 	cache := NewFileCache()
-	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
-	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs, Cache: cache})
+	const content = "package main\n\nfunc a() {}\n"
+	cache.Record("a.go", StageAST, content, StageResult{Stage: StageAST, Status: SevPass, Detail: "ast valid"})
 
-	ast := p.stages[0].Run(context.Background(), []string{"a.go"}) // astStage
-	pol := p.stages[6].Run(context.Background(), []string{"a.go"}) // policyStage
-
-	if ast.Status != SevPass {
-		t.Fatalf("AST = %s, want pass (first run, no cache yet)", ast.Status)
+	got, ok := cache.Lookup("a.go", StageAST, content)
+	if !ok || got.Stage != StageAST {
+		t.Fatalf("Lookup(a.go, ast) = %+v, %v; want the recorded AST result", got, ok)
 	}
-	if pol.Status != SevPass {
-		t.Fatalf("Policy = %s, want pass (first run, AST cache entry must not satisfy it)", pol.Status)
+	for _, other := range []Stage{StagePolicy, StageLint, StageBuild, StageTest, StageFormat, StageTypeCheck} {
+		if r, ok := cache.Lookup("a.go", other, content); ok {
+			t.Errorf("Lookup(a.go, %s) hit the AST entry (%+v); the key must include the stage", other, r)
+		}
+	}
+	// Same stage, same bytes, a different path is also a miss.
+	if _, ok := cache.Lookup("b.go", StageAST, content); ok {
+		t.Error("Lookup(b.go, ast) hit a.go's entry; the key must include the path")
+	}
+}
+
+func TestEngineWiresTheFileCache(t *testing.T) {
+	// L8-005's exit bar is "re-verify of an unchanged file is O(1)", but
+	// PipelineDeps.Cache was never set outside the cache tests: every engine
+	// built by NewEngine had a nil cache, so the binary did not have the
+	// capability the tests certified. NewEngine now owns the cache.
+	bus := newBusEnv()
+	defer bus.bus.Close()
+	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
+	e := NewEngine(Deps{Runner: passRunner(), FS: fs, Bus: bus.bus})
+	ch := Change{Task: "t_cache", Files: []string{"a.go"}}
+
+	if v := e.Verify(context.Background(), ch, fullPolicy()); !v.Pass {
+		t.Fatalf("first Verify = %+v, want pass", v)
+	}
+	first, _ := bus.collect(7)
+	if stageStatus(first)["ast"] != "pass" {
+		t.Fatalf("first run ast status = %q, want pass", stageStatus(first)["ast"])
+	}
+
+	// Same engine, same unchanged file: the AST stage must hit the cache.
+	v := e.Verify(context.Background(), ch, fullPolicy())
+	second, _ := bus.collect(7)
+	if got := stageStatus(second)["ast"]; got != "skip" {
+		t.Errorf("second run ast status = %q, want skip (cache hit); the engine's cache is not wired", got)
+	}
+	// And a cached skip is still verification signal — the re-verify passes
+	// rather than tripping the engine's no-signal rule.
+	if !v.Pass {
+		t.Errorf("second Verify = %+v, want pass (a cache hit is a re-used measurement)", v)
 	}
 }
 
@@ -107,12 +148,12 @@ func TestNilCacheStillRunsStages(t *testing.T) {
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	p := NewPipeline(PipelineDeps{Runner: passRunner(), FS: fs}) // no Cache
 
-	r := p.stages[0].Run(context.Background(), []string{"a.go"})
+	r := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{})
 	if r.Status != SevPass {
 		t.Errorf("AST with nil cache = %s, want pass (stage ran normally)", r.Status)
 	}
 	// A second run with the nil cache also runs (no skip).
-	r2 := p.stages[0].Run(context.Background(), []string{"a.go"})
+	r2 := p.stages[0].Run(context.Background(), []string{"a.go"}, Policy{})
 	if r2.Status != SevPass {
 		t.Errorf("second AST run with nil cache = %s, want pass (no cache → no skip)", r2.Status)
 	}

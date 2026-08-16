@@ -104,7 +104,11 @@ func (a *assertCognitive) HasMore(*session.Task) bool { return false }
 
 // RecordToolResult satisfies runtime.CognitiveCore. The assert core ignores
 // tool results — it always answers Final, so multi-turn never reaches it.
-func (a *assertCognitive) RecordToolResult(string, string) {}
+func (a *assertCognitive) RecordToolResult(string, string, string) {}
+
+// Reset satisfies runtime.CognitiveCore. The assert core holds no
+// conversation, so there is nothing to drop.
+func (a *assertCognitive) Reset() {}
 
 // Reflect on the assertion core aborts (it never reaches the verify path; a
 // failure here would be a wiring bug). The real cognitive core (Sprint 6
@@ -140,25 +144,47 @@ func containsStr(s, sub string) bool {
 // runtime's Update to a published event the memory listener reacts to — never
 // mutating a sub-store directly (§11.2).
 
-// memoryStoreAdapter satisfies runtime.MemoryStore. Update publishes a
-// task.completed-like learning event the memory listener reacts to (it does
-// NOT mutate a sub-store directly — the listener is the only writer, §11.2).
-// The runtime calls Update(ctx, taskID) on the direct-answer path; the adapter
-// turns that into a memory learning by publishing the event the listener
-// dispatches. The store + bus are owned by the composition root.
+// memoryStoreAdapter satisfies runtime.MemoryStore. The store + bus are owned
+// by the composition root.
+//
+// DEAD SEAM, deliberately. The port is wired so the runtime's nil-guard does not
+// silently pick a different code path for the composed binary than the one the
+// tests exercise, but Update has no work to do — see the method.
 type memoryStoreAdapter struct {
 	store *memory.Store
 	bus   *event.Bus
 }
 
-// Update satisfies runtime.MemoryStore. It publishes a memory-relevant event
-// (task.completed) so the listener persists the conversation + records the
-// learning — the event-driven path, not a direct write.
-func (a memoryStoreAdapter) Update(ctx context.Context, taskID session.TaskID) error {
-	if a.bus == nil {
-		return nil
-	}
-	return a.bus.Publish(ctx, &event.TaskCompletedEvent{Task: string(taskID)})
+// Update satisfies runtime.MemoryStore, and does nothing.
+//
+// It used to publish a task.completed so the memory listener would persist. The
+// problem is where the runtime calls it (internal/runtime/core.go, direct-answer
+// arm):
+//
+//	if c.memory != nil {
+//	    _ = c.memory.Update(ctx, h.id)
+//	}
+//	_ = c.session.CompleteTask(ctx, h.id) // publishes task.completed for real
+//
+// One line apart, so the adapter's event was a duplicate of one the session
+// manager was about to publish anyway. Nothing was gained — memory persists off
+// the genuine event — and three things were lost: consumers counted two
+// completions for one task (the TUI folds it, infra's observers meter it, the
+// durability log replays it), the transcript recorded a lifecycle event that
+// never happened, and the listener's task.completed arm launches its persist on
+// a goroutine, so the two of them wrote conversations/<id>.json and
+// exec/<id>.json concurrently.
+//
+// A component must not fabricate another component's lifecycle event, and this
+// one had no reason to: the runtime already announces task completion through
+// the session manager that owns it.
+//
+// That leaves the port with nothing to do at its only call site. Keeping it as a
+// no-op rather than deleting it is a judgement call to raise, not to settle
+// here: the alternative is dropping runtime.MemoryStore, its wiring, and the
+// c.memory branch, which touches internal/runtime.
+func (a memoryStoreAdapter) Update(context.Context, session.TaskID) error {
+	return nil
 }
 
 // contextMemoryAdapter satisfies context.Memory, surfacing memory's preferences
@@ -185,15 +211,46 @@ func (a contextMemoryAdapter) Project(ctx context.Context, projectID string) []e
 	return toContextParts(a.store.Project().Project(ctx))
 }
 
-// Retrieve runs a semantic query against the memory's vector store (File 11
-// §11.6.2) and returns the top-k code chunks as context.Parts. The query is the
-// task goal; the Context Engine's gather feeds the hits into the prompt's RAG
-// group. A nil store returns none (the noop path).
+// Retrieve runs the task goal against both of memory's retrieval stores and
+// returns up to topK context.Parts for the prompt's RAG group (File 11 §11.6.2).
+// A nil store returns none (the noop path).
+//
+// There are two stores and they hold different things. Semantic() is the
+// code-chunk index — file contents, chunked and embedded. Insights() is the
+// KnowledgeStore: short lessons the memory listener records off verification
+// events. Until now this method read only the first, which made the second a
+// write-only subsystem: every insight was recorded, persisted to knowledge.json,
+// re-embedded on every Open, and recalled by nothing. The advertised
+// cross-session learning wrote lessons down and never read them back.
+//
+// The split is deliberate rather than a plain merge-and-sort. topK is the
+// caller's budget for how much retrieved material reaches the model, and the
+// two corpora do not produce comparable cosine scores — a short insight and a
+// long function body are not competing on the same scale, so sorting them
+// against each other would let one corpus starve the other for reasons that
+// have nothing to do with relevance. So insights get a bounded share (a quarter,
+// at least one slot) and the code index gets everything they do not use. At the
+// topK=10 the Context Engine passes, that is at most two insights and at least
+// eight chunks; the code index never loses more than it would to a single weak
+// match. Whatever the split, the total still honours topK.
+//
+// See insights_recall_test.go, which pins both directions: the lesson comes
+// back in the next session, and the code chunks keep their place.
 func (a contextMemoryAdapter) Retrieve(ctx context.Context, query string, topK int) []econtext.Part {
 	if a.store == nil || query == "" || topK <= 0 {
 		return nil
 	}
-	return toContextParts(a.store.Semantic().Retrieve(ctx, query, topK))
+	insightShare := topK / 4
+	if insightShare < 1 {
+		insightShare = 1
+	}
+	insights := a.store.Insights().Retrieve(ctx, query, insightShare)
+	chunks := a.store.Semantic().Retrieve(ctx, query, topK-len(insights))
+
+	// Code chunks first: they are what the model is about to edit, and the
+	// lessons read as commentary on them. The Context Engine's ranker reorders
+	// by score afterwards, so this is presentation order, not priority.
+	return toContextParts(append(chunks, insights...))
 }
 
 // toContextParts translates memory.Part → context.Part field-for-field. The

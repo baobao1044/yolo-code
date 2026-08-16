@@ -2,10 +2,14 @@
 // "re-verify of an unchanged file is O(1)"). A per-file, content-keyed cache
 // remembers a file's stage result keyed by (path, stage, content hash); a
 // second Verify of the same unchanged file skips the work and returns the
-// cached result. The cache is wired into the per-file stages (AST, Policy):
-// the command stages (Lint/Build/Tests) run on dirs, not files, so they
-// aren't keyed here — a package-level cache is a later refinement; L8-005
-// ships the per-file cache the exit bar names.
+// cached result. The AST stage is the one consumer today: the command stages
+// (Lint/Build/Tests) run on dirs rather than files so they aren't keyed here,
+// and the Policy stage isn't cached either — its rules are cheap string scans
+// and its verdict aggregates across the whole file set, so a per-file entry
+// wouldn't reconstruct it. (An earlier version of this comment claimed Policy
+// was wired; it never was.) A package-level cache is a later refinement;
+// L8-005 ships the per-file cache the exit bar names. NewEngine creates the
+// cache, so every production Verify has it.
 //
 // Determinism: the key uses FNV-1a over the file content (stdlib hash/fnv), so
 // the key is byte-deterministic — the same content hits the cache across runs

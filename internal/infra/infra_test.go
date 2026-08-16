@@ -14,6 +14,7 @@ package infra
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -233,28 +234,123 @@ func TestInfraStopNoLeakAfterBusClose(t *testing.T) {
 	}
 }
 
-// TestInfraStopBoundsWaitAtCtxDeadline pins the exit-bar's "≤ a deadline": if
-// the bus is NEVER closed, done never closes, so Stop bounds its wait at ctx's
-// deadline and returns ctx.Err() WITHOUT running the flushes (the subscriber is
-// still live — flushing under it is safe for the stubs, but the leak is the
-// caller's fault for not closing the bus).
-func TestInfraStopBoundsWaitAtCtxDeadline(t *testing.T) {
+// TestInfraStopTerminatesSubscriberWithUnclosedBus pins the leak fix: Stop must
+// end the root subscriber even when the caller never closed the bus. It used to
+// wait on `done` alone, so an unclosed bus meant the goroutine ran for the life
+// of the process and the flushes were skipped entirely — and the caller cannot
+// always close first, since event.Bus.Subscribe after Close hands back a channel
+// that is never closed at all. Stop now closes `quit`: the goroutine exits, the
+// flushes run, and Stop returns nil well inside the deadline.
+func TestInfraStopTerminatesSubscriberWithUnclosedBus(t *testing.T) {
 	bus := event.New() // intentionally never closed
 	i, _ := Start(context.Background(), bus, testConfig())
 	calls := 0
 	i.stop = []func(context.Context) error{
 		func(context.Context) error { calls++; return nil },
 	}
-	deadline, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	deadline, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := i.Stop(deadline)
-	if err == nil {
-		t.Fatal("Stop returned nil with an unclosed bus, want ctx deadline error")
+	if err := i.Stop(deadline); err != nil {
+		t.Fatalf("Stop with an unclosed bus: %v, want nil (subscriber must exit on quit)", err)
 	}
-	if calls != 0 {
-		t.Errorf("stop funcs ran %d times, want 0 (must not flush when the subscriber is still live)", calls)
+	select {
+	case <-i.done:
+	default:
+		t.Error("done is still open after Stop — the subscriber goroutine leaked")
 	}
-	// Clean up the leaked goroutine so the test process exits cleanly.
+	if calls != 1 {
+		t.Errorf("stop funcs ran %d times, want 1 (shutdown must complete, not be skipped)", calls)
+	}
 	_ = bus.Close()
-	_ = i.Stop(context.Background())
+}
+
+// TestInfraStopFlushesWhenCtxAlreadyExpired pins the other half of "complete
+// Stop": an expired ctx reports ctx.Err() but must NOT skip the shutdown funcs.
+// A deadline means hurry, and dropping the flush there discards exactly the
+// telemetry an operator needs when shutdown is already going badly.
+func TestInfraStopFlushesWhenCtxAlreadyExpired(t *testing.T) {
+	bus := event.New() // never closed, so the wait takes the ctx branch
+	i, _ := Start(context.Background(), bus, testConfig())
+	calls := 0
+	i.stop = []func(context.Context) error{
+		func(context.Context) error { calls++; return nil },
+	}
+	expired, cancel := context.WithCancel(context.Background())
+	cancel() // already done before Stop is entered
+	if err := i.Stop(expired); err == nil {
+		t.Log("Stop returned nil — the subscriber beat the expired ctx, which is fine")
+	}
+	if calls != 1 {
+		t.Errorf("stop funcs ran %d times, want 1 (an expired ctx must not skip the flushes)", calls)
+	}
+	_ = bus.Close()
+}
+
+// TestInfraStartStopNoGoroutineLeak pins §13.2.1's "no goroutine leak" with an
+// actual count: repeated Start/Stop cycles — the shape a retrying or re-execing
+// startup path produces — must return the process to its baseline goroutine
+// count. One cycle deliberately skips the bus Close so the quit path is the one
+// under measurement.
+func TestInfraStartStopNoGoroutineLeak(t *testing.T) {
+	base := runtime.NumGoroutine()
+	for n := 0; n < 5; n++ {
+		bus := event.New()
+		i, err := Start(context.Background(), bus, testConfig())
+		if err != nil {
+			t.Fatalf("Start #%d: %v", n, err)
+		}
+		if n%2 == 0 {
+			if err := bus.Close(); err != nil { // the tidy path
+				t.Fatalf("close bus #%d: %v", n, err)
+			}
+		}
+		if err := i.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop #%d: %v", n, err)
+		}
+		_ = bus.Close()
+	}
+	// The bus's own goroutines unwind asynchronously; give them a bounded
+	// window rather than a bare sleep, then assert against the baseline.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > base && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := runtime.NumGoroutine(); got > base {
+		t.Errorf("goroutines = %d after 5 Start/Stop cycles, baseline %d — leak", got, base)
+	}
+}
+
+// TestInfraStartIsSafeWithMissingConfigAndBus pins "no panic when config or env
+// is missing": Start must survive a zero Config (no Version, no HostID, no log
+// format, no permissions mode, zero rate limits) and must report a nil bus as
+// an error rather than panicking mid-startup, before logging is even up.
+func TestInfraStartIsSafeWithMissingConfigAndBus(t *testing.T) {
+	if _, err := Start(context.Background(), nil, DefaultConfig()); err == nil {
+		t.Error("Start with a nil bus returned nil error, want a wiring error")
+	}
+	bus := event.New()
+	i, err := Start(context.Background(), bus, Config{}) // entirely zero-valued
+	if err != nil {
+		t.Fatalf("Start with a zero Config: %v", err)
+	}
+	if i.Perms == nil || i.Limiter == nil || i.Cost == nil || i.Secrets == nil {
+		t.Error("Start with a zero Config left a concern nil")
+	}
+	if err := bus.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := i.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// A nil ctx must not panic either — the root's ctx plumbing is inconsistent
+	// across cmd/yolo's three entry points.
+	bus2 := event.New()
+	i2, err := Start(nil, bus2, Config{}) //nolint:staticcheck // nil ctx is the case under test
+	if err != nil {
+		t.Fatalf("Start with a nil ctx: %v", err)
+	}
+	_ = bus2.Close()
+	if err := i2.Stop(nil); err != nil { //nolint:staticcheck // nil ctx is the case under test
+		t.Fatalf("Stop with a nil ctx: %v", err)
+	}
 }

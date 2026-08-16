@@ -357,6 +357,14 @@ margin is irrelevant: the bottleneck is network latency to the model, not CPU.
 | **Error reporting** | **Sentry Go SDK** (opt-in) |
 | Release | `goreleaser` + GitHub Actions |
 
+> **This is the intended stack, not the shipped one.** `go.mod` currently lists
+> only `bubbletea`/`lipgloss`/`bubbles` plus the standard library. Every other
+> row above is behind an interface seam with a stdlib implementation in place:
+> SQLite is a JSON file, tree-sitter is `go/parser`, the OTel and Sentry SDKs
+> are no-op stubs, and the "Vector DB (RAG)" row is a lexical retrieval index —
+> hashed term-frequency similarity, no embedding model (File 11 §11.6). The
+> seams are what make the swap cheap; the swap has not happened.
+
 ### 1.6.7 Acknowledged trade-offs
 Verbose error handling (mitigated by a small `internal/xerrors` helper and a
 consistent `if err != nil` style); generics used sparingly; GC pauses
