@@ -14,7 +14,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"os"
 	"sync"
 
 	"github.com/baobao1044/yolo-code/internal/event"
@@ -151,7 +150,12 @@ func (s *Store) quarantineOrFail(err error) error {
 		return err
 	}
 	s.warnings = append(s.warnings, err)
-	if rerr := os.Rename(ce.Path, ce.Path+".corrupt"); rerr != nil {
+	// Through shareRenamer for the same reason writeJSON is: on Windows both
+	// ends of this rename can be held open — the corrupt file by another
+	// process, and <name>.corrupt by a reader looking at a previous
+	// quarantine. Failing here only adds a warning, but a warning that says
+	// "access denied" about a file nobody is denying is worse than none.
+	if rerr := shareRenamer().do(ce.Path, ce.Path+".corrupt"); rerr != nil {
 		s.warnings = append(s.warnings, rerr)
 	}
 	return nil

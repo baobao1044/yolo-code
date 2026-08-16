@@ -12,7 +12,49 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// renamer is os.Rename plus the "wait for the other handle to close" policy
+// Windows needs to replace a file at all (rename_windows.go explains why; on
+// Unix the policy is a no-op and this is a plain os.Rename).
+//
+// Its collaborators are fields rather than direct calls for a testing reason
+// that is worth stating: the production wiring makes blocked() constantly
+// false on Unix, so the retry arithmetic would be unreachable on every
+// platform the tests actually run on, and the loop would be verified only by
+// the CI job that happens to have a reader racing a writer. With the policy
+// injectable, rename_test.go exercises the budget, the give-up path and the
+// narrowness everywhere.
+type renamer struct {
+	rename  func(from, to string) error
+	blocked func(error) bool
+	retries int
+	backoff time.Duration
+}
+
+// shareRenamer is the production wiring.
+func shareRenamer() renamer {
+	return renamer{
+		rename:  os.Rename,
+		blocked: renameBlocked,
+		retries: renameRetries,
+		backoff: renameBackoff,
+	}
+}
+
+// do renames from→to, waiting out a destination that is merely held open. It
+// returns the last attempt's own error rather than a synthesised timeout, so
+// the caller sees what the filesystem actually said.
+func (r renamer) do(from, to string) error {
+	for attempt := 0; ; attempt++ {
+		err := r.rename(from, to)
+		if err == nil || attempt >= r.retries || !r.blocked(err) {
+			return err
+		}
+		time.Sleep(r.backoff)
+	}
+}
 
 // writeJSON marshals v to a 2-space-indented JSON file at path, creating the
 // parent directory lazily (matches session.writeJSON so the two stores look
@@ -25,6 +67,10 @@ import (
 // on the next Open reads as corruption. Rename within a directory is atomic,
 // so a reader sees the old file or the new one and nothing in between. The
 // temp name is dot-prefixed so IndexRepo's dotfile skip never indexes it.
+//
+// "Atomic" is the Unix guarantee. Windows cannot replace a file that another
+// handle holds open at all, so the rename goes through shareRenamer, which
+// waits the reader out; see rename_windows.go.
 func writeJSON(path string, v any) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -64,7 +110,7 @@ func writeJSON(path string, v any) error {
 		_ = os.Remove(name)
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := shareRenamer().do(name, path); err != nil {
 		_ = os.Remove(name)
 		return err
 	}

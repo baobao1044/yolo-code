@@ -199,6 +199,16 @@ func copyFile(src, dst string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// KNOWN GAP, third instance of a hazard fixed in the other two: on Windows
+	// a replacing rename fails outright if any handle holds dst open, because
+	// Go's os.Open omits FILE_SHARE_DELETE. internal/memory hit this for real
+	// in CI and internal/session has the same shape; both now retry through a
+	// small renamer type. Not done here because package main would need a
+	// third copy of that type plus its two build-tagged policy files, which is
+	// more structure than this path earns: a checkpoint copies into a freshly
+	// created shadow tree, so the realistic holder is an antivirus scanner
+	// rather than another reader of ours. If checkpoint creation ever reports
+	// "Access is denied" on Windows, this line is why.
 	return os.Rename(tmpName, dst)
 }
 

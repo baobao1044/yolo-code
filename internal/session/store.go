@@ -215,6 +215,9 @@ func createJSON(path string, v any) error {
 // JSON now goes to a scratch file in the same directory, is fsynced, and is
 // renamed over the destination — rename being atomic, every observer sees
 // either the whole old record or the whole new one.
+//
+// That is the POSIX guarantee. Windows cannot replace a file another handle
+// holds open, so the rename goes through shareRenamer; see lock_windows.go.
 func writeJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -242,12 +245,58 @@ func writeJSON(path string, v any) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	// Through shareRenamer rather than os.Rename directly: on Windows a
+	// destination that any reader currently holds open cannot be replaced at
+	// all, and readJSON's retry only covers the other side of that same race.
+	// See lock_windows.go. Latent here rather than observed — the failure CI
+	// caught was internal/memory's identical write, which has a test that
+	// reads while it writes; this one has no such test and so has simply never
+	// been watched at the wrong moment.
+	if err := shareRenamer().do(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
 	syncDir(dir)
 	return nil
+}
+
+// renamer is os.Rename plus the wait Windows needs to replace a file that a
+// reader currently holds open (lock_windows.go). Off Windows the policy is a
+// no-op and do() is a plain os.Rename.
+//
+// The collaborators are fields so the retry arithmetic is reachable from a
+// test on any platform: with the production wiring, blocked() is constantly
+// false everywhere the tests run, and the loop would be verified only by
+// whichever CI job happened to catch a reader mid-replace. internal/memory has
+// the same type for the same reason — the import matrix keeps the two stores
+// from sharing helpers (File 15 §15.15.2), which is why this is a copy rather
+// than an import.
+type renamer struct {
+	rename  func(from, to string) error
+	blocked func(error) bool
+	retries int
+	backoff time.Duration
+}
+
+func shareRenamer() renamer {
+	return renamer{
+		rename:  os.Rename,
+		blocked: renameBlocked,
+		retries: renameRetries,
+		backoff: renameBackoff,
+	}
+}
+
+// do renames from→to, waiting out a destination that is merely held open, and
+// returns the last attempt's own error rather than a synthesised timeout.
+func (r renamer) do(from, to string) error {
+	for attempt := 0; ; attempt++ {
+		err := r.rename(from, to)
+		if err == nil || attempt >= r.retries || !r.blocked(err) {
+			return err
+		}
+		time.Sleep(r.backoff)
+	}
 }
 
 // writeAndSync writes data and flushes it to the platter. Without the fsync the
