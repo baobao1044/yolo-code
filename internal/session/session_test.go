@@ -154,9 +154,33 @@ func TestCreateRunDonePersistsEndToEnd(t *testing.T) {
 		t.Fatalf("CompleteTask: %v", err)
 	}
 
-	// Simulate a process restart: a brand-new Manager over the same store.
+	// Simulate a process restart: a brand-new Manager over the same store, and
+	// actually drive it. The Manager built here used to be assigned to _, so the
+	// test named after restart safety exercised nothing — a second Manager
+	// reissuing s_1/t_1 and truncating the first run's records went unnoticed.
 	restart := New(Deps{Store: store, Bus: bus, Git: NewInMemCheckpointer()})
-	_ = restart
+	rsess, rtask, err := restart.Resume(ctx, sid)
+	if err != nil {
+		t.Fatalf("restart Resume: %v", err)
+	}
+	if rsess.ID != sid || rtask == nil || rtask.ID != tid || rtask.Status != StatusDone {
+		t.Errorf("restart Resume = session %q / task %+v, want %q / %q DONE", rsess.ID, rtask, sid, tid)
+	}
+	// The restarted Manager's own allocations must not land on the first run's.
+	rsid, err := restart.OpenSession(ctx, "proj", "second launch")
+	if err != nil {
+		t.Fatalf("restart OpenSession: %v", err)
+	}
+	rtid, err := restart.StartTask(ctx, rsid, "second goal")
+	if err != nil {
+		t.Fatalf("restart StartTask: %v", err)
+	}
+	if rsid == sid {
+		t.Errorf("restart reissued session id %q", sid)
+	}
+	if rtid == tid {
+		t.Errorf("restart reissued task id %q", tid)
+	}
 
 	// The session file lists the task; the task file shows it DONE.
 	sess, err := store.LoadSession(ctx, sid)
@@ -185,3 +209,89 @@ func TestCreateRunDonePersistsEndToEnd(t *testing.T) {
 
 // statFile is a thin os.Stat wrapper so the persistence assertions read clearly.
 func statFile(path string) (os.FileInfo, error) { return os.Stat(path) }
+
+// TestSnapshotTaskDoesNotRaceTheManager pins the accessor the runtime needs.
+//
+// LoadTaskPublic hands out the Manager's live object, so a caller that wants to
+// keep a task has to copy it — and the copy is itself an unsynchronized read of
+// a struct Cancel and CompleteTask are still writing. The window is narrow but
+// real: the runtime holds a task for the whole drive loop, and a cancel
+// arriving between StartTask and the copy lands inside it.
+//
+// SnapshotTask closes it by taking the copy under m.mu. Removing that lock (or
+// pointing the loop below at LoadTaskPublic + an external copy) makes this fail
+// under -race, which is what makes it a test rather than a comment.
+func TestSnapshotTaskDoesNotRaceTheManager(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	sid, err := m.OpenSession(ctx, "/repo", "snapshot")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	// One cancel per task: Cancel is terminal, so re-cancelling the same task
+	// stops writing and the race window closes with it.
+	const n = 40
+	tids := make([]TaskID, 0, n)
+	for i := 0; i < n; i++ {
+		tid, err := m.StartTask(ctx, sid, "goal")
+		if err != nil {
+			t.Fatalf("StartTask %d: %v", i, err)
+		}
+		tids = append(tids, tid)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, tid := range tids {
+			_ = m.Cancel(ctx, tid, "test")
+		}
+	}()
+	for _, tid := range tids {
+		if snap := m.SnapshotTask(tid); snap != nil && snap.ID != tid {
+			t.Errorf("SnapshotTask(%s) returned task %s", tid, snap.ID)
+		}
+	}
+	<-done
+
+	if m.SnapshotTask("t_nope") != nil {
+		t.Error("SnapshotTask returned non-nil for an unknown task")
+	}
+}
+
+// TestSnapshotTaskIsACopy pins the other half: the returned task must not alias
+// the Manager's, or the caller is back to writing inside this package's
+// critical section from its own goroutine. History is the field that matters —
+// Undo and Restore reslice the Manager's backing array.
+func TestSnapshotTaskIsACopy(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	sid, err := m.OpenSession(ctx, "/repo", "snapshot")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	tid, err := m.StartTask(ctx, sid, "goal")
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	m.RecordEntry(tid, HistoryEntry{Kind: KindBash, Summary: "one"})
+
+	snap := m.SnapshotTask(tid)
+	if snap == nil {
+		t.Fatal("SnapshotTask returned nil for a known task")
+	}
+	if snap == m.LoadTaskPublic(tid) {
+		t.Fatal("SnapshotTask returned the live pointer, not a copy")
+	}
+	if len(snap.History) != 1 {
+		t.Fatalf("snapshot carries %d history entries, want 1", len(snap.History))
+	}
+	snap.History[0].Summary = "mutated by the caller"
+	if live := m.LoadTaskPublic(tid); live.History[0].Summary != "one" {
+		t.Errorf("writing the snapshot's history reached the Manager's task: %q",
+			live.History[0].Summary)
+	}
+}

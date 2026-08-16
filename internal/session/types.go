@@ -96,6 +96,39 @@ type Task struct {
 	History    []HistoryEntry `json:"history"` // undo-able changes, see §3.3
 }
 
+// clone returns a copy of the task that is safe to serialize while other
+// goroutines keep mutating the live one. The Manager takes it under m.mu and
+// marshals the copy outside, rather than holding m.mu across the store's write.
+//
+// The tradeoff, deliberately taken this way round: holding the mutex across a
+// synchronous fsync would serialize every Manager operation — including the
+// TUI's History reads and the user-event goroutine's Cancel — behind disk I/O,
+// so a slow disk would stall the drive loop and freeze the interface. A copy
+// costs one small allocation per save instead, which is noise next to the JSON
+// marshal that follows it.
+//
+// History is copied element-wise because Undo and Restore reslice it and a
+// later append then writes into the shared backing array. Paths inside an entry
+// are never mutated once the entry is recorded, so they stay shared.
+// Callers must hold the Manager's mutex.
+func (t *Task) clone() *Task {
+	c := *t
+	c.History = append([]HistoryEntry(nil), t.History...)
+	if t.EndedAt != nil {
+		ended := *t.EndedAt
+		c.EndedAt = &ended
+	}
+	return &c
+}
+
+// clone returns a copy of the session safe to serialize while StartTask appends
+// to the live one. Callers must hold the Manager's mutex.
+func (s *Session) clone() *Session {
+	c := *s
+	c.Tasks = append([]TaskID(nil), s.Tasks...)
+	return &c
+}
+
 // HistoryEntry records one applied change so it can be undone (File 03 §3.3.1).
 // It is the link between "the model did something" and "the user can undo it".
 type HistoryEntry struct {
@@ -127,6 +160,11 @@ var (
 	// ErrTaskNotCancellable is returned when Cancel is called on an already
 	// terminal task.
 	ErrTaskNotCancellable = errStr("session: task is not cancellable (already terminal)")
+	// ErrTaskAlreadyTerminal is returned when Fail is called on a task that has
+	// already ended. A late failure must not overwrite a recorded outcome: a
+	// task that finished DONE and then trips an error on the way out stays
+	// DONE, because the work did land.
+	ErrTaskAlreadyTerminal = errStr("session: task has already ended")
 )
 
 // errStr is a tiny helper so the error vars above read as values, not casts.
