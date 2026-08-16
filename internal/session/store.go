@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 )
 
 // Store persists sessions and tasks. The Manager reads/writes through it so a
@@ -271,8 +272,40 @@ func syncDir(dir string) {
 	_ = d.Close()
 }
 
+// readShareRetries and readShareBackoff bound the retry in readJSON. Twenty
+// attempts at 2ms is ~40ms of patience, which is orders of magnitude longer
+// than a rename's replace window and short enough that a genuinely locked file
+// still reports its error while the user is still looking at the screen.
+// Vars, not consts, so a test can shrink the budget without waiting it out.
+var (
+	readShareRetries = 20
+	readShareBackoff = 2 * time.Millisecond
+)
+
+// readJSON reads and decodes path, retrying briefly while the file is locked by
+// a concurrent writer.
+//
+// The retry is Windows' share of the atomic-write story. writeJSON's rename is
+// atomic on both platforms in the sense that matters — no reader ever sees a
+// half-written record — but POSIX rename and Windows MoveFileEx differ in what
+// a reader arriving mid-replace sees. On POSIX it sees the old inode or the new
+// one, always one of them. On Windows the destination is briefly unopenable and
+// CreateFile returns ERROR_SHARING_VIOLATION, so the reader gets an error where
+// its POSIX counterpart got data: 9 of 400 concurrent reads failed that way in
+// CI, and none of them saw a torn file.
+//
+// So this is not a weaker guarantee papered over — the write stays atomic and
+// the read stays all-or-nothing. It closes the one gap Windows adds, which is
+// that "come back in a moment" arrives spelled as a fatal error. Only the two
+// lock errnos are retried; ErrNotExist still answers immediately, because a
+// missing record is the ErrNotFound path and must not be slowed by 40ms of
+// hoping it shows up.
 func readJSON(path string, v any) error {
 	data, err := os.ReadFile(path)
+	for i := 0; err != nil && i < readShareRetries && isLockedByAnotherProcess(err); i++ {
+		time.Sleep(readShareBackoff)
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
 		return err
 	}

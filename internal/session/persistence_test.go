@@ -557,3 +557,39 @@ func TestTwoManagersOnOneRootMintDisjointIDs(t *testing.T) {
 		t.Errorf("subagent task = %+v / %v", su, err)
 	}
 }
+
+// TestMissingRecordIsNotRetried pins the one decision inside readJSON's retry
+// loop that is observable on every platform.
+//
+// The loop exists for a Windows-only hazard (a reader arriving while
+// MoveFileEx replaces the destination), and the temptation when writing it is
+// to retry "any error, it might settle". That would make ErrNotFound — by far
+// the most common answer the store gives, on every resume that names a session
+// the user already deleted — cost the whole retry budget before saying so, on
+// every platform, forever. The budget is small enough that nobody would
+// notice it in a benchmark and large enough to be felt in a picker that
+// probes several ids.
+//
+// Rather than assert a wall-clock bound, which would be flaky on a loaded CI
+// box, the test shortens the budget to something a slow machine could never
+// beat by accident and asserts the call comes back well inside it.
+func TestMissingRecordIsNotRetried(t *testing.T) {
+	oldRetries, oldBackoff := readShareRetries, readShareBackoff
+	readShareRetries, readShareBackoff = 50, 20*time.Millisecond // 1s if retried
+	t.Cleanup(func() { readShareRetries, readShareBackoff = oldRetries, oldBackoff })
+
+	store := NewFileStore(t.TempDir())
+
+	start := time.Now()
+	_, err := store.LoadSession(context.Background(), "s_never_existed")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("LoadSession(absent) = %v, want ErrNotFound", err)
+	}
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("LoadSession(absent) took %v against a 1s retry budget — a missing "+
+			"record is being waited on as if it might appear, and every ErrNotFound "+
+			"in the product now pays for a hazard that only exists mid-rename", elapsed)
+	}
+}
