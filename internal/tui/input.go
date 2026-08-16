@@ -39,6 +39,10 @@ import (
 //	else             → (no-op; editable keys never arrive here — Update
 //	                   routes them to m.input.Update before handleInput)
 //
+// The printable bindings (q, ?, y, n) only ever reach here when nothing is
+// capturing text — Update's capturingText guard sends them to the textinput
+// instead while the user is typing, so "query" is a word, not a quit.
+//
 // Every publish returns a tea.Cmd so it runs off the render thread. handleInput
 // is a pure function of (model, key) — no I/O.
 func handleInput(m Model, key tea.KeyMsg) (Model, tea.Cmd) {
@@ -139,6 +143,17 @@ func handleSlashCommand(m Model, text string) (Model, tea.Cmd) {
 	// Regular text (no slash prefix) → normal submit with optimistic echo.
 	if !strings.HasPrefix(text, "/") {
 		m.messages = append(m.messages, messageView{role: "user", text: text})
+		// Header ownership: what the user typed IS the goal, so show it now
+		// rather than waiting for a task.started to echo it back — and mark the
+		// next task.started as the answer to this submit, so the sub-agent Cores
+		// a multi-agent goal spawns can't take the header over (see
+		// Model.awaitingTask).
+		m.goal = text
+		m.taskID = ""
+		m.state = ""
+		m.stateWhy = ""
+		m.awaitingTask = true
+		m.nested = 0
 		return m, publish(m.publisher, &event.UserSubmitEvent{Text: text})
 	}
 
@@ -177,7 +192,12 @@ func handleSlashCommand(m Model, text string) (Model, tea.Cmd) {
 		}
 		return m, nil
 	// --- Runtime commands (publish UserCommandEvent, driver responds) ---
-	case "model", "provider", "status":
+	// /pref is a runtime command rather than a local one even though the TUI
+	// could hold a preference map itself: the store is per-user and
+	// cross-project (§11.5.2), it is read by the context build on every turn,
+	// and the memory listener is its single writer. A TUI-local copy would be
+	// a second source of truth for data the agent reads.
+	case "model", "provider", "status", "pref":
 		m.messages = append(m.messages, messageView{role: "user", text: text}) // echo the command
 		return m, publish(m.publisher, &event.UserCommandEvent{Command: cmd, Args: args})
 	// --- Unknown ---

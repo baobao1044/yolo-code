@@ -13,9 +13,9 @@
 package tui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/baobao1044/yolo-code/internal/event"
 )
@@ -57,18 +57,39 @@ type diffView struct {
 	diff       string // rendered unified-diff hunks (Phase D)
 }
 
-// costView is the cost-meter rail (TUI-005). Phase D adds dollars + tokensEst
-// accumulated from real events (CostIncurredEvent.Dollars + llm.token deltas).
-// dollars is exact (per-tool-call rate from the cost publisher); tokensEst is a
-// rough estimate (len(delta)/4 ≈ 4 chars per token — the provider doesn't parse
-// usage on the live path). level/aborted stay for the degradation ladder.
+// costView is the cost-meter rail (TUI-005). It accumulates from cost.incurred
+// and llm.token deltas. Only calls is a measured quantity: dollars is zero
+// unless the operator supplies their own rates via YOLO_COST_RATES, and the
+// token figure is chars/4 ≈ 4 chars per token. The rail must not present
+// either as measured. level/aborted stay for the degradation ladder.
+//
+// The estimate is no longer there because the counts do not exist — the
+// provider's usage is now parsed in cognitive.Core.Think and carried on the
+// Turn, and the runtime bills it. It is there because no event carries those
+// counts to this layer: llm.token has only a text Delta, and cost.incurred has
+// only Dollars. Replacing the estimate with real numbers needs a bus event
+// carrying TokensIn/TokensOut plus the UsageKnown flag — and it must carry the
+// flag, because a turn nobody counted has to keep reading as an estimate here
+// rather than silently resetting the rail to a measured-looking zero.
 type costView struct {
 	level       string
 	aborted     bool
 	abortReason string
-	dollars     float64 // accumulated from cost.incurred (real per-tool-call rate)
-	tokensEst   int     // rough: len(llm.token delta)/4, accumulated
+	calls       int     // tool calls seen on cost.incurred — exact
+	dollars     float64 // 0 unless the operator configured YOLO_COST_RATES
+	tokenChars  int     // characters seen on llm.token deltas — the raw sum
 }
+
+// tokensEst is the rail's ≈4-chars-per-token estimate. The division happens
+// HERE, once, over the accumulated character count — not per delta as it used
+// to. One llm.token event is one provider chunk, i.e. roughly one token, so
+// dividing each delta threw away a remainder per token instead of once at the
+// end: a 127-character stream of 28 chunks read as 22 tokens instead of 31,
+// and a provider that streams one character at a time truncated every single
+// delta to zero and rendered a measured-looking "~0 tok" after the whole
+// answer. The estimate is allowed to be rough; it is not allowed to be a
+// number nobody computed.
+func (c costView) tokensEst() int { return c.tokenChars / 4 }
 
 // boardView is the multi-agent board (TUI-009). Hidden until coord.plan.ready.
 type boardView struct {
@@ -99,6 +120,23 @@ type Model struct {
 	goal     string // TaskStartedEvent has no Kind field — header shows the goal (spec gap)
 	state    string // current FSM state label, from state.change (TUI-003); "" until then
 	stateWhy string // transition reason, from StateChangeEvent.Why
+
+	// header ownership. The header describes ONE task: the one this TUI
+	// submitted. A multi-agent goal builds a runtime.Core per coder todo, and
+	// each of those Cores publishes task.started/state.change/task.completed on
+	// the same bus the TUI renders — folding those into the global header made
+	// it read "✔ DONE" one todo into the plan, with the user's goal replaced by
+	// a sub-agent's brief.
+	//
+	// awaitingTask is set the moment the user submits, so the next task.started
+	// is recognised as the answer to that submit and everything after it is a
+	// sub-agent's. nested counts sub-agent tasks that have started and not yet
+	// finished; it exists because an ID filter alone is not enough — the two
+	// session.Managers on this bus (the driver's and the agent runner's) each
+	// start their counter at zero, so both mint "t_1" and a sub-agent's
+	// lifecycle is indistinguishable from the user's by ID. Depth is.
+	awaitingTask bool
+	nested       int
 
 	// chat (TUI-002)
 	messages      []messageView

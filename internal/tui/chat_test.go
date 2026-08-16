@@ -18,6 +18,39 @@ import (
 	"github.com/baobao1044/yolo-code/internal/event"
 )
 
+// TestPartialMessageRendersAsInterrupted covers the render half of
+// settleStream. The fold tests prove a "partial" message is written; nothing
+// there proves chatView knows what to do with it.
+//
+// That matters because the role switch has a default arm that prints
+// "<role>: <text>" for anything unrecognized. A partial answer falling through
+// it would still appear on screen — just labelled "partial: " in muted grey,
+// which reads like a debug leak rather than an interrupted reply. The test
+// therefore asserts the deliberate rendering and explicitly rules out the
+// fallback, so the two cannot be confused for each other by a passing run.
+func TestPartialMessageRendersAsInterrupted(t *testing.T) {
+	m := newModelForTest()
+	m.messages = []messageView{{role: "partial", text: "The fix is to move the guard"}}
+
+	out := chatView(m, 100, 20)
+
+	if !contains(out, "The fix is to move the guard") {
+		t.Fatalf("the partial text never reached the pane:\n%s", out)
+	}
+	if !contains(out, "interrupted") {
+		t.Errorf("no interrupted marker; a truncated answer rendered as a complete one is "+
+			"worse than no answer:\n%s", out)
+	}
+	if contains(out, "partial: ") {
+		t.Errorf("fell through to the default role arm — the role name is leaking into the "+
+			"chat as a label:\n%s", out)
+	}
+	if contains(out, "│ ") {
+		t.Errorf("used the solid assistant gutter, which is what a complete reply gets; "+
+			"the partial needs its own:\n%s", out)
+	}
+}
+
 // TestFoldThinkingAccumulates pins §14.5: llm.thinking deltas append to the
 // live thinking bubble and turn streaming on. Two deltas → concatenation.
 func TestFoldThinkingAccumulates(t *testing.T) {

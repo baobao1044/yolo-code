@@ -138,6 +138,66 @@ func TestSlashStatusPublishesCommand(t *testing.T) {
 	}
 }
 
+// TestSlashPrefPublishesCommand pins /pref <key> <value> as a runtime command.
+//
+// The negative half is the point. Before this, "pref" was not in the runtime
+// case list, so it fell to the default arm and was echoed back as "unknown
+// command: /pref" — locally, with nothing published. A test that only checked
+// the happy path would pass just as well against a routing table that had lost
+// the entry to a merge, because the assertions would then never run: pub.last
+// would be nil and the type assert would Fatal with a message about the wrong
+// event type rather than about the routing. So this asserts the count first and
+// says what a zero means.
+func TestSlashPrefPublishesCommand(t *testing.T) {
+	pub := &fakePublisher{}
+	m := newModelForTest()
+	m.publisher = pub
+	m, cmd := handleSlashCommand(m, "/pref style I prefer table-driven tests")
+	runCmd(t, cmd)
+
+	if pub.count != 1 {
+		t.Fatalf("published %d events, want 1 — /pref fell through to the unknown-command "+
+			"arm and was answered locally instead of reaching the driver; messages=%v",
+			pub.count, m.messages)
+	}
+	uc, ok := pub.last.(*event.UserCommandEvent)
+	if !ok {
+		t.Fatalf("published %T, want *UserCommandEvent", pub.last)
+	}
+	if uc.Command != "pref" {
+		t.Errorf("Command = %q, want pref", uc.Command)
+	}
+	// The whole remainder is the value, spaces and all. Cutting at the first
+	// space would leave "I" as the preference and drop the sentence — and a
+	// preference is prose far more often than it is a single token.
+	if uc.Args != "style I prefer table-driven tests" {
+		t.Errorf("Args = %q, want the key plus the full remaining line", uc.Args)
+	}
+}
+
+// TestSlashPrefWithNoArgsStillReachesTheDriver pins the listing form. A bare
+// /pref must not be treated as a malformed command and swallowed locally: the
+// preferences live in the memory store, which only the driver can read, so the
+// TUI has nothing to answer with and every form has to be forwarded.
+func TestSlashPrefWithNoArgsStillReachesTheDriver(t *testing.T) {
+	pub := &fakePublisher{}
+	m := newModelForTest()
+	m.publisher = pub
+	m, cmd := handleSlashCommand(m, "/pref")
+	runCmd(t, cmd)
+
+	if pub.count != 1 {
+		t.Fatalf("bare /pref published %d events, want 1; messages=%v", pub.count, m.messages)
+	}
+	uc, ok := pub.last.(*event.UserCommandEvent)
+	if !ok {
+		t.Fatalf("published %T, want *UserCommandEvent", pub.last)
+	}
+	if uc.Command != "pref" || uc.Args != "" {
+		t.Errorf("got Command=%q Args=%q, want pref with empty args", uc.Command, uc.Args)
+	}
+}
+
 // TestSlashUnknownEchoesError pins /foo (unknown) echoes an error locally.
 func TestSlashUnknownEchoesError(t *testing.T) {
 	pub := &fakePublisher{}

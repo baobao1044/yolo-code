@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/baobao1044/yolo-code/internal/event"
+	"github.com/charmbracelet/bubbles/cursor"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -325,5 +326,225 @@ func TestUpdateApprovalSuppressesTyping(t *testing.T) {
 	mm := m2.(Model)
 	if mm.input.Value() != "" {
 		t.Errorf("typing during approval: input.Value() = %q, want \"\" (suppressed)", mm.input.Value())
+	}
+}
+
+// --- Focus-guarded single-character commands (§14.8.2, defect 4.1) ---
+
+// keyModel returns a laid-out test model wired for keystroke tests. The cursor
+// is static because these tests drain every returned Cmd, and the blinking
+// cursor's Cmd is a ~0.5s sleep — one per keystroke otherwise.
+func keyModel() Model {
+	m := newModelForTest()
+	m.ready = true
+	m.width = 120
+	m.height = 40
+	m.input.Cursor.SetMode(cursor.CursorStatic)
+	return m
+}
+
+// runCmdQuit executes a tea.Cmd (flattening a Batch) and reports whether any
+// message it produced was tea.QuitMsg. Publishes run on the way, so a caller
+// can assert both "did it quit" and "what did it publish" from one call.
+func runCmdQuit(t *testing.T, cmd tea.Cmd) bool {
+	t.Helper()
+	if cmd == nil {
+		return false
+	}
+	msgs := []tea.Msg{cmd()}
+	if b, ok := msgs[0].(tea.BatchMsg); ok {
+		msgs = nil
+		for _, c := range b {
+			if c != nil {
+				msgs = append(msgs, c())
+			}
+		}
+	}
+	for _, msg := range msgs {
+		if _, q := msg.(tea.QuitMsg); q {
+			return true
+		}
+	}
+	return false
+}
+
+// TestUpdateQIsTextWhileTyping is the defect-4.1 guard: a bare 'q' typed into a
+// focused input is a CHARACTER, not the quit command. Before the focus guard
+// this keystroke published user.quit and returned tea.Quit, which made the
+// default interface unusable — you could not type "query", "quick", or any
+// Vietnamese word containing q.
+func TestUpdateQIsTextWhileTyping(t *testing.T) {
+	pub := &fakePublisher{}
+	m := keyModel()
+	m.publisher = pub
+
+	m2, cmd := m.Update(keyMsg("q"))
+	mm := m2.(Model)
+
+	if runCmdQuit(t, cmd) {
+		t.Error("'q' typed into a focused input returned tea.Quit — the program would exit mid-word")
+	}
+	if pub.count != 0 {
+		t.Errorf("'q' typed into a focused input published %d events (%T), want 0", pub.count, pub.last)
+	}
+	if mm.input.Value() != "q" {
+		t.Errorf("input.Value() = %q after typing 'q', want \"q\"", mm.input.Value())
+	}
+}
+
+// TestUpdateTypingQueryLandsInBuffer pins the whole word: every printable key
+// that doubles as a command (q, ?, y, n) must reach the textinput while the
+// input is focused, so a full word survives.
+func TestUpdateTypingQueryLandsInBuffer(t *testing.T) {
+	pub := &fakePublisher{}
+	m := keyModel()
+	m.publisher = pub
+
+	var mm tea.Model = m
+	for _, k := range []string{"q", "u", "e", "r", "y", "?"} {
+		var cmd tea.Cmd
+		mm, cmd = mm.Update(keyMsg(k))
+		if runCmdQuit(t, cmd) {
+			t.Fatalf("typing %q quit the program", k)
+		}
+	}
+	got := mm.(Model)
+	if got.input.Value() != "query?" {
+		t.Errorf("input.Value() = %q after typing \"query?\", want \"query?\"", got.input.Value())
+	}
+	if got.showHelp {
+		t.Error("'?' typed into a focused input toggled the help overlay instead of inserting a character")
+	}
+	if pub.count != 0 {
+		t.Errorf("typing published %d events, want 0", pub.count)
+	}
+}
+
+// TestUpdateSingleKeyCommandsWhenInputBlurred is the other half of the guard:
+// with the input line NOT focused nothing is capturing text, so the single-key
+// commands are global again — 'q' quits, '?' toggles help.
+func TestUpdateSingleKeyCommandsWhenInputBlurred(t *testing.T) {
+	pub := &fakePublisher{}
+	m := keyModel()
+	m.publisher = pub
+	m.input.Blur()
+
+	_, cmd := m.Update(keyMsg("q"))
+	if !runCmdQuit(t, cmd) {
+		t.Error("'q' with the input unfocused did not return tea.Quit")
+	}
+	if pub.count != 1 {
+		t.Fatalf("'q' with the input unfocused published %d events, want 1 (user.quit)", pub.count)
+	}
+	if _, ok := pub.last.(*event.UserQuitEvent); !ok {
+		t.Errorf("published %T, want *UserQuitEvent", pub.last)
+	}
+
+	m2, _ := m.Update(keyMsg("?"))
+	if !m2.(Model).showHelp {
+		t.Error("'?' with the input unfocused did not toggle the help overlay")
+	}
+}
+
+// TestUpdateCtrlCQuitsInEveryFocusState pins the unconditional escape hatch:
+// Ctrl+C quits whatever owns the keyboard — mid-word, with the input blurred,
+// while an approval is pending, and with the help overlay up.
+func TestUpdateCtrlCQuitsInEveryFocusState(t *testing.T) {
+	typing := keyModel()
+	typing.input.SetValue("query")
+
+	blurred := keyModel()
+	blurred.input.Blur()
+
+	approving := keyModel()
+	approving.taskID = "t-1"
+	approving.approval = &approvalView{id: "apr_1"}
+
+	helping := keyModel()
+	helping.showHelp = true
+
+	for name, m := range map[string]Model{
+		"typing":   typing,
+		"blurred":  blurred,
+		"approval": approving,
+		"help":     helping,
+	} {
+		pub := &fakePublisher{}
+		m.publisher = pub
+		_, cmd := m.Update(keyMsg("ctrl+c"))
+		if !runCmdQuit(t, cmd) {
+			t.Errorf("ctrl+c while %s did not return tea.Quit", name)
+		}
+		if _, ok := pub.last.(*event.UserQuitEvent); !ok {
+			t.Errorf("ctrl+c while %s published %T, want *UserQuitEvent", name, pub.last)
+		}
+	}
+}
+
+// TestUpdateApprovalYNStaysGlobal is the regression guard for the y/n guard the
+// focus rule is modelled on: an approval takes the keyboard away from the input
+// line, so y/n answer it instead of being typed. Driven through Update (not
+// handleInput) so the routing itself is covered.
+func TestUpdateApprovalYNStaysGlobal(t *testing.T) {
+	for key, want := range map[string]string{"y": "user.approve", "n": "user.reject"} {
+		pub := &fakePublisher{}
+		m := keyModel()
+		m.publisher = pub
+		m.taskID = "t-1"
+		m.approval = &approvalView{id: "apr_1"}
+
+		m2, cmd := m.Update(keyMsg(key))
+		runCmd(t, cmd)
+
+		if pub.count != 1 {
+			t.Fatalf("%q during approval published %d events, want 1 (%s)", key, pub.count, want)
+		}
+		if m2.(Model).input.Value() != "" {
+			t.Errorf("%q during approval was typed into the input (%q), want the approval answer",
+				key, m2.(Model).input.Value())
+		}
+		switch key {
+		case "y":
+			if _, ok := pub.last.(*event.UserApproveEvent); !ok {
+				t.Errorf("'y' published %T, want *UserApproveEvent", pub.last)
+			}
+		case "n":
+			if _, ok := pub.last.(*event.UserRejectEvent); !ok {
+				t.Errorf("'n' published %T, want *UserRejectEvent", pub.last)
+			}
+		}
+	}
+}
+
+// TestUpdateApprovalYNAreTextOutsideApproval is the mirror: with no approval
+// pending y/n are ordinary characters, not swallowed commands.
+func TestUpdateApprovalYNAreTextOutsideApproval(t *testing.T) {
+	m := keyModel()
+
+	var mm tea.Model = m
+	for _, k := range []string{"y", "n"} {
+		mm, _ = mm.Update(keyMsg(k))
+	}
+	if got := mm.(Model).input.Value(); got != "yn" {
+		t.Errorf("input.Value() = %q after typing \"yn\" outside approval, want \"yn\"", got)
+	}
+}
+
+// TestUpdateHelpOverlayClosesOnAnyKey pins the overlay's own promise ("press any
+// key to close"). It matters more once '?' is a plain character while typing:
+// without this the overlay would be unclosable from the keyboard.
+func TestUpdateHelpOverlayClosesOnAnyKey(t *testing.T) {
+	for _, k := range []string{"?", "x", "esc", "enter"} {
+		m := keyModel()
+		m.showHelp = true
+
+		m2, _ := m.Update(keyMsg(k))
+		mm := m2.(Model)
+		if mm.showHelp {
+			t.Errorf("%q did not close the help overlay", k)
+		}
+		if mm.input.Value() != "" {
+			t.Errorf("%q leaked into the input while closing the help overlay: %q", k, mm.input.Value())
+		}
 	}
 }

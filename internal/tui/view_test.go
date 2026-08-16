@@ -77,7 +77,7 @@ func TestViewRendersHeaderAndStatus(t *testing.T) {
 	if out == "" {
 		t.Fatal("View() returned empty string")
 	}
-	for _, want := range []string{"t-42", "render the TUI", "EXECUTE", ">", "q quit"} {
+	for _, want := range []string{"t-42", "render the TUI", "EXECUTE", ">", "ctrl+c quit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View() missing expected content %q; output:\n%s", want, out)
 		}
@@ -196,8 +196,12 @@ func TestViewRendersHelpOverlay(t *testing.T) {
 	m.showHelp = true
 
 	out := m.View()
-	if !strings.Contains(out, "key bindings") {
-		t.Errorf("help overlay missing 'key bindings'; output:\n%s", out)
+	// "keys and commands", not the old "key bindings": the overlay now lists the
+	// slash commands as well, and titling it after only half its contents is how
+	// /theme and /provider stayed undiscoverable in a screen that was supposed
+	// to be where you find them.
+	if !strings.Contains(out, "keys and commands") {
+		t.Errorf("help overlay missing its title; output:\n%s", out)
 	}
 	if !strings.Contains(out, "PgUp") {
 		t.Errorf("help overlay missing 'PgUp'; output:\n%s", out)
@@ -338,7 +342,7 @@ func TestTruncateJSON(t *testing.T) {
 
 // TestViewEmptyStateOnboarding pins Phase C: before the first task (no
 // messages, no taskID), the chat pane renders a welcome panel naming the
-// agent, listing example prompts, and pointing to ? for help.
+// agent, listing example prompts, and pointing to /help for help.
 func TestViewEmptyStateOnboarding(t *testing.T) {
 	m := newModelForTest()
 	m.ready = true
@@ -353,7 +357,7 @@ func TestViewEmptyStateOnboarding(t *testing.T) {
 	if !strings.Contains(out, "examples") {
 		t.Errorf("empty-state missing 'examples' section; output:\n%s", out)
 	}
-	if !strings.Contains(out, "press ? for key bindings") {
+	if !strings.Contains(out, "/help for key bindings") {
 		t.Errorf("empty-state missing help hint; output:\n%s", out)
 	}
 	// An example prompt should be visible.
@@ -406,12 +410,12 @@ func TestViewHelpOverlaySections(t *testing.T) {
 func TestStatusDotTextFallback(t *testing.T) {
 	cases := map[string]string{
 		"assigned":    "[~]",
-		"coded":        "[~]",
-		"approved":     "[+]",
-		"tested:pass":  "[+]",
-		"rework":       "[!]",
-		"tested:fail":  "[!]",
-		"unknown":      "[ ]",
+		"coded":       "[~]",
+		"approved":    "[+]",
+		"tested:pass": "[+]",
+		"rework":      "[!]",
+		"tested:fail": "[!]",
+		"unknown":     "[ ]",
 	}
 	for status, want := range cases {
 		got := statusDot(status)
@@ -453,7 +457,7 @@ func TestStatusViewFullOnWideTerminal(t *testing.T) {
 	if !strings.Contains(out, "[chat]") {
 		t.Errorf("wide status line missing [chat]: %q", out)
 	}
-	if !strings.Contains(out, "q quit") {
+	if !strings.Contains(out, "ctrl+c quit") {
 		t.Errorf("wide status line missing quit hint: %q", out)
 	}
 	if !strings.Contains(out, "type goal + Enter") {

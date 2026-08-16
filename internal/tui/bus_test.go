@@ -7,6 +7,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/baobao1044/yolo-code/internal/event"
@@ -90,6 +91,18 @@ func TestSubscribeTopicsAreRenderingTopics(t *testing.T) {
 			t.Errorf("missing topic %q (got %v)", w, got)
 		}
 	}
+	// The list above is a mirror of renderTopics and would happily agree with
+	// itself while the TUI went deaf to the one event that ends a multi-agent
+	// run. So assert the property instead of the spelling: the terminal
+	// event's own Type() must be covered by something we subscribed to. This
+	// is the check that was missing when PlanDoneEvent's bare "plan.done" sat
+	// outside coord.> — and the check that keeps a future rename honest,
+	// because it reads the topic off the event rather than off a literal.
+	terminal := (&event.PlanDoneEvent{}).Type()
+	if !coveredBy(got, terminal) {
+		t.Errorf("no subscribed topic covers %q; a multi-agent run can never tell the TUI it finished (got %v)", terminal, got)
+	}
+
 	// Must NOT include the root wildcard — that's Infra's subscription.
 	if have[">"] {
 		t.Error("subscribed to root \">\" — that is Infra's job, not the TUI's (§14.3.2)")
@@ -105,6 +118,28 @@ type recordingSub struct {
 func (r *recordingSub) Subscribe(topics ...event.Topic) <-chan event.Envelope {
 	r.topics = append(r.topics, topics...)
 	return make(chan event.Envelope)
+}
+
+// coveredBy reports whether any subscription pattern in got covers topic t,
+// using the bus's own rules: bare ">" is the root wildcard, an exact pattern
+// matches itself, and "prefix.>" matches anything under "prefix.".
+//
+// This restates event.matches, which is unexported. Reaching for the real one
+// would mean exporting a bus internal purely so a TUI test could borrow it,
+// and that is a worse trade than eight duplicated lines sitting next to the
+// contract they check. If the wildcard grammar ever grows a third form, this
+// is the copy that has to learn it.
+func coveredBy(got []event.Topic, t event.Topic) bool {
+	for _, w := range got {
+		if w == ">" || w == t {
+			return true
+		}
+		if strings.HasSuffix(string(w), ".>") &&
+			strings.HasPrefix(string(t), strings.TrimSuffix(string(w), ">")) {
+			return true
+		}
+	}
+	return false
 }
 
 // keep tea referenced so the import is used even before busWatcher's real Cmd
