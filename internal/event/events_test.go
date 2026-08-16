@@ -2,6 +2,11 @@ package event
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -16,6 +21,7 @@ func sampleEvents() map[Topic]Event {
 		"task.started":         &TaskStartedEvent{Task: "t_01", Session: "s_1", Goal: "fix bug"},
 		"task.completed":       &TaskCompletedEvent{Task: "t_01"},
 		"task.cancelled":       &TaskCancelledEvent{Task: "t_01", Reason: "user", Partial: "half-done"},
+		"task.failed":          &TaskFailedEvent{Task: "t_01", Reason: "planner returned no plan"},
 		"task.paused":          &TaskPausedEvent{Task: "t_01"},
 		"task.checkpoint":      &CheckpointEvent{Task: "t_01", Name: "pre-edit", Snapshot: json.RawMessage(`{"sha":"abc"}`)},
 		"task.restored":        &RestoredEvent{Task: "t_01", Name: "pre-edit"},
@@ -54,32 +60,89 @@ func sampleEvents() map[Topic]Event {
 		"coord.code.ready":     &CodeReadyEvent{PlanID: "p_1", TodoID: "td_1", Diff: "@@", SelfReport: "done"},
 		"coord.review.verdict": &ReviewVerdictEvent{PlanID: "p_1", TodoID: "td_1", Approved: true, Comments: []string{"good"}},
 		"coord.test.report":    &TestReportEvent{PlanID: "p_1", TodoID: "td_1", Passed: true, Output: "ok"},
-		"error":                &ErrorEvent{Task: t, Layer: "cognitive", Code: "timeout", Msg: "slow", Retry: true},
+		"coord.plan.done":      &PlanDoneEvent{PlanID: "p_1", Done: true, Merged: true, Summary: "all todos green"},
+		"cost.incurred":        &CostIncurredEvent{Task: t, Tool: "shell", Dollars: 0.0125, Reason: "tool call"},
+		"scope.enter":          &ScopeEnterEvent{Task: "t_01", Level: "L2", Reason: "goal is multi-file"},
+		"scope.transition":     &ScopeTransitionEvent{Task: "t_01", FromLevel: "L2", ToLevel: "L3", Action: "expand", Reason: "tests failed"},
+		"workflow.selected":    &WorkflowSelectedEvent{Task: "t_01", Goal: "fix the null deref", Workflow: "bugfix"},
+		// Dropped is populated on purpose: it is the only map in the catalog, and
+		// a nil one would round-trip trivially while the populated case — the one
+		// that actually ships when a prompt is trimmed — went untested.
+		"prompt.budget": &TokenBudgetEvent{
+			Task: "t_01", Window: 8192, Used: 7104,
+			Dropped: map[string]int{"retrieved files": 3, "conversation turns": 11},
+		},
+		"user.preference":  &UserPreferenceEvent{Task: "t_01", Key: "commits", Value: "conventional"},
+		"user.command":     &UserCommandEvent{Command: "provider", Args: "groq"},
+		"command.response": &CommandResponseEvent{Text: "provider: groq (llama-3.3-70b-versatile)"},
+		"error":            &ErrorEvent{Task: t, Layer: "cognitive", Code: "timeout", Msg: "slow", Retry: true},
+	}
+}
+
+// topicsDeclaredInEventsGo parses events.go and returns the topic string every
+// Type() method returns. This is the source of truth the catalog must cover:
+// deriving it from the code makes it impossible for a new event to be defined
+// and then forgotten in the registry.
+func topicsDeclaredInEventsGo(t *testing.T) map[Topic]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "events.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse events.go: %v", err)
+	}
+	out := map[Topic]string{}
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Type" || fn.Recv == nil || fn.Body == nil {
+			continue
+		}
+		for _, stmt := range fn.Body.List {
+			ret, ok := stmt.(*ast.ReturnStmt)
+			if !ok || len(ret.Results) != 1 {
+				continue
+			}
+			lit, ok := ret.Results[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			topic, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("unquote %s: %v", lit.Value, err)
+			}
+			out[Topic(topic)] = types.ExprString(fn.Recv.List[0].Type)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("parsed no Type() methods out of events.go; the derivation is broken, not the catalog")
+	}
+	return out
+}
+
+// TestCatalogCoversEveryDeclaredEvent is the anti-drift check for the catalog.
+// The registry used to be a hand-maintained Register() list, and it had drifted:
+// five events (command.response, cost.incurred, plan.done, user.command,
+// user.preference) were declared in events.go but never registered, so Replay
+// could not reconstruct them and any durability log containing one was
+// unreadable. Deriving the expected set from the source keeps that from
+// happening again.
+func TestCatalogCoversEveryDeclaredEvent(t *testing.T) {
+	for topic, typeName := range topicsDeclaredInEventsGo(t) {
+		if _, ok := factoryFor(topic); !ok {
+			t.Errorf("%s declares topic %q but nothing registers it; a log containing it cannot be replayed", typeName, topic)
+		}
 	}
 }
 
 // TestCatalogHasAll16TopicGroups verifies the registry covers every topic group
-// from File 05 §5.4.9. A missing group is a wire-contract regression.
+// from File 05 §5.4.9. A missing group is a wire-contract regression. The set is
+// read from the catalog table rather than hand-copied, so it cannot drift.
 func TestCatalogHasAll16TopicGroups(t *testing.T) {
-	want := []Topic{
-		"task.started", "task.completed", "task.cancelled", "task.paused",
-		"task.checkpoint", "task.restored", "task.undone",
-		"state.change", "context.built", "approval.request",
-		"observation.received", "verification.failed", "reflection.note",
-		"patch.applied",
-		"verification.stage",
-		"llm.token", "llm.thinking", "assistant.message", "tool.call",
-		"cost.degraded", "cost.abort",
-		"tool.result", "memory.update",
-		"user.submit", "user.cancel", "user.approve", "user.reject",
-		"user.pause", "user.resume", "user.quit",
-		"coord.task.assign", "coord.plan.ready", "coord.code.ready",
-		"coord.review.verdict", "coord.test.report",
-		"error",
+	if len(catalog) == 0 {
+		t.Fatal("catalog table is empty")
 	}
-	for _, topic := range want {
+	for topic := range catalog {
 		if _, ok := factoryFor(topic); !ok {
-			t.Errorf("topic %q has no registered factory; catalog is incomplete", topic)
+			t.Errorf("topic %q is in the catalog table but init did not register it", topic)
 		}
 	}
 }
@@ -88,8 +151,12 @@ func TestCatalogHasAll16TopicGroups(t *testing.T) {
 // survives Envelope JSON round-trip with Type, CausalID, and payload intact.
 func TestRoundTripAllCatalogEvents(t *testing.T) {
 	samples := sampleEvents()
-	if len(samples) < 33 {
-		t.Errorf("sample table has %d events, want at least 33 (full catalog)", len(samples))
+	// Coverage is derived from the catalog, not a magic count: adding a topic
+	// without adding a sample must fail here rather than quietly go untested.
+	for topic := range catalog {
+		if _, ok := samples[topic]; !ok {
+			t.Errorf("catalog topic %q has no sample event; its round-trip is untested", topic)
+		}
 	}
 	for topic, want := range samples {
 		want := want

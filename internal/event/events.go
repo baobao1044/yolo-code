@@ -46,6 +46,29 @@ type TaskCancelledEvent struct {
 func (e *TaskCancelledEvent) Type() Topic      { return "task.cancelled" }
 func (e *TaskCancelledEvent) CausalID() TaskID { return TaskID(e.Task) }
 
+// TaskFailedEvent announces the third terminal outcome: the task stopped
+// because something went wrong, not because it finished (task.completed) and
+// not because anyone asked it to stop (task.cancelled).
+//
+// It was specified from the start — File 03 §3.2 draws RUNNING --> FAILED on
+// "retries exhausted / hard error", §5.4.1 lists task.failed among the task
+// lifecycle topics, docs/user/commands.md documents it to users, and
+// memory/knowledge.go already names "task.failed" as a valid insight Source —
+// but it was never added here, so nothing in the tree could emit it and the
+// runtime's error path left tasks recorded as still running.
+//
+// Reason is the cause as the runtime saw it. It is the only field that
+// distinguishes one failure from another to a log reader, which is why it is
+// carried rather than left to the separate ErrorEvent: that one is published by
+// every layer for every kind of trouble and says nothing about task lifecycle.
+type TaskFailedEvent struct {
+	Task   string `json:"task"`
+	Reason string `json:"reason"`
+}
+
+func (e *TaskFailedEvent) Type() Topic      { return "task.failed" }
+func (e *TaskFailedEvent) CausalID() TaskID { return TaskID(e.Task) }
+
 type TaskPausedEvent struct {
 	Task string `json:"task"`
 }
@@ -314,13 +337,18 @@ func (e *PlanReadyEvent) CausalID() TaskID { return TaskID(e.PlanID) }
 // PlanDoneEvent signals the orchestrator has finished all todos (and, when a
 // verifier is wired, the merge/re-verify step passed).
 type PlanDoneEvent struct {
-	PlanID  string `json:"plan_id"`
-	Done    bool   `json:"done"`
-	Merged  bool   `json:"merged"`
-	Summary string `json:"summary"`
+	PlanID string `json:"plan_id"`
+	Done   bool   `json:"done"`
+	// Canceled reports that the run ended because its context was canceled
+	// (Ctrl-C, shutdown) rather than because the work failed. Done is false
+	// either way; this is the flag that tells the two apart. A consumer that
+	// only cares about success can keep reading Done alone.
+	Canceled bool   `json:"canceled"`
+	Merged   bool   `json:"merged"`
+	Summary  string `json:"summary"`
 }
 
-func (e *PlanDoneEvent) Type() Topic      { return "plan.done" }
+func (e *PlanDoneEvent) Type() Topic      { return "coord.plan.done" }
 func (e *PlanDoneEvent) CausalID() TaskID { return TaskID(e.PlanID) }
 
 type CodeReadyEvent struct {
@@ -446,6 +474,38 @@ type WorkflowSelectedEvent struct {
 
 func (e *WorkflowSelectedEvent) Type() Topic      { return "workflow.selected" }
 func (e *WorkflowSelectedEvent) CausalID() TaskID { return TaskID(e.Task) }
+
+// --- L5: Prompt Compiler (File 06 §6.6.3) ---
+
+// TokenBudgetEvent reports what the Prompt Compiler's budget stage did to one
+// compile: the window it worked against, the tokens the finished prompt
+// occupies, and how many parts each group lost to trimming.
+//
+// It exists because its absence was load-bearing. Nothing anywhere recorded
+// prompt size or trimming decisions, so two budget defects — the Preferences
+// group being emitted but never counted, and allocate()'s reserve floor zeroing
+// every group cap on small windows — ran unnoticed until an audit read the
+// arithmetic. A model silently receiving none of the context it asked for is
+// indistinguishable, from outside, from one that received all of it.
+//
+// Window is 0 on the unbudgeted path (no window configured); Used is measured
+// either way, so a zero window never has to double as "not measured". Dropped
+// is keyed by group name ("retrieved files", "retrieved chunks", "recalled
+// preferences", "conversation turns") and omitted entirely when nothing was
+// trimmed, which is the common case.
+//
+// The struct lives in package event rather than internal/prompt so the
+// durability catalog can reconstruct it on replay without an import cycle —
+// the same reason scope and workflow put theirs here.
+type TokenBudgetEvent struct {
+	Task    TaskID         `json:"task"`
+	Window  int            `json:"window"`
+	Used    int            `json:"used"`
+	Dropped map[string]int `json:"dropped,omitempty"`
+}
+
+func (e *TokenBudgetEvent) Type() Topic      { return "prompt.budget" }
+func (e *TokenBudgetEvent) CausalID() TaskID { return e.Task }
 
 // --- L-memory: user preference (File 11 §11.5.2) ---
 

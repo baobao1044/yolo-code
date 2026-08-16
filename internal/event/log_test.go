@@ -2,6 +2,8 @@ package event
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -130,6 +132,119 @@ func TestCrashRecoveryReplaysDurableEvents(t *testing.T) {
 	}
 }
 
+// TestReplayRoundTripsTheExactEventStream is the P4 contract: what the log
+// gives back must be what the bus delivered, event for event and field for
+// field. Comparing the re-marshaled envelopes catches anything Replay drops or
+// mangles, and the mix deliberately includes topics the catalog used to be
+// missing (plan.done, cost.incurred, user.preference, command.response), which
+// Replay could not reconstruct at all.
+func TestReplayRoundTripsTheExactEventStream(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bus.log")
+	bus, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	sink := bus.Subscribe(">")
+
+	stream := []Event{
+		&TaskStartedEvent{Task: "t_01", Session: "s_1", Goal: "fix bug"},
+		&PlanDoneEvent{PlanID: "p_1", Done: true, Merged: true, Summary: "all todos green"},
+		&CostIncurredEvent{Task: "t_01", Tool: "shell", Dollars: 0.0125, Reason: "tool call"},
+		&UserPreferenceEvent{Task: "t_01", Key: "commits", Value: "conventional"},
+		&CommandResponseEvent{Text: "provider: groq"},
+		&ScopeEnterEvent{Task: "t_01", Level: "L2", Reason: "multi-file"},
+	}
+	for i, e := range stream {
+		if err := bus.Publish(context.Background(), e); err != nil {
+			t.Fatalf("publish %d (%s): %v", i, e.Type(), err)
+		}
+	}
+
+	// Capture exactly what a subscriber saw, to compare against the log.
+	delivered := make([]Envelope, 0, len(stream))
+	for i := range stream {
+		env, ok := recv(t, sink)
+		if !ok {
+			t.Fatalf("event %d not delivered", i)
+		}
+		delivered = append(delivered, env)
+	}
+	if err := bus.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	replayed, err := Replay(path)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(replayed) != len(delivered) {
+		t.Fatalf("replay returned %d envelopes, want %d", len(replayed), len(delivered))
+	}
+	for i := range delivered {
+		want, err := json.Marshal(delivered[i])
+		if err != nil {
+			t.Fatalf("marshal delivered %d: %v", i, err)
+		}
+		got, err := json.Marshal(replayed[i])
+		if err != nil {
+			t.Fatalf("marshal replayed %d: %v", i, err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("event %d drifted through the log\n want %s\n got  %s", i, want, got)
+		}
+	}
+}
+
+// TestReplayRecoversRecordsBeforeATruncatedTail is the 4.17c driver. A crash
+// between write and fsync leaves a half-written final line — which is exactly
+// the situation crash recovery exists for. Replay used to return (nil, err) for
+// such a log, throwing away every record that *had* been fsynced; the whole
+// recovery was lost to the one torn record at the end.
+func TestReplayRecoversRecordsBeforeATruncatedTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bus.log")
+	bus, err := Open(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	want := []string{"t0", "t1", "t2"}
+	for i, task := range want {
+		if err := bus.Publish(context.Background(), ping(task)); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+	if err := bus.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Simulate the torn write: a fourth record that stops mid-payload.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, err := f.WriteString(`{"v":1,"seq":4,"at":"2026-01-01T00:00:00Z","type":"test.ping","evt":{"tas`); err != nil {
+		t.Fatalf("write torn record: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close torn: %v", err)
+	}
+
+	envs, err := Replay(path)
+	if !errors.Is(err, ErrTruncatedLog) {
+		t.Fatalf("Replay err = %v, want ErrTruncatedLog", err)
+	}
+	if len(envs) != len(want) {
+		t.Fatalf("recovered %d envelopes, want %d: a torn tail must not discard records that were already fsynced", len(envs), len(want))
+	}
+	for i, env := range envs {
+		if env.Seq != uint64(i+1) {
+			t.Errorf("env %d Seq = %d, want %d", i, env.Seq, i+1)
+		}
+		if env.Evt.CausalID() != TaskID(want[i]) {
+			t.Errorf("env %d CausalID = %q, want %q", i, env.Evt.CausalID(), want[i])
+		}
+	}
+}
+
 // TestReplayRejectsUnknownTopic proves the codec refuses events it can't
 // reconstruct — a corruption guard, not a silent skip.
 func TestReplayRejectsUnknownTopic(t *testing.T) {
@@ -170,4 +285,43 @@ func appendUnknownTopicLine(path, topic string) error {
 	defer f.Close()
 	_, err = f.WriteString(line)
 	return err
+}
+
+// TestReplayReconstructsARetiredTopicName is the migration half of a topic
+// rename. Logs on disk are immutable and outlive the name that wrote them, and
+// Replay resolves a topic through the registry with no fallback — one
+// unrecognised name and TestReplayRejectsUnknownTopic's error path takes out
+// the ENTIRE file, not just that record. So a rename without a legacyTopics
+// entry silently orphans every transcript written before it.
+//
+// "plan.done" is the retired spelling of coord.plan.done. This writes the old
+// name by hand, exactly as a pre-rename build would have, and asserts it comes
+// back as a usable *PlanDoneEvent with its payload intact.
+func TestReplayReconstructsARetiredTopicName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.log")
+	line := `{"v":1,"seq":1,"at":"` + time.Now().UTC().Format(time.RFC3339Nano) +
+		`","type":"plan.done","evt":{"plan_id":"p_1","done":true,"merged":true,"summary":"all todos green"}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatalf("write legacy log: %v", err)
+	}
+
+	envs, err := Replay(path)
+	if err != nil {
+		t.Fatalf("replay of a pre-rename log failed: %v — every transcript written before the rename is now unreadable", err)
+	}
+	if len(envs) != 1 {
+		t.Fatalf("replay returned %d envelopes, want 1", len(envs))
+	}
+	pd, ok := envs[0].Evt.(*PlanDoneEvent)
+	if !ok {
+		t.Fatalf("replayed event is %T, want *PlanDoneEvent", envs[0].Evt)
+	}
+	if pd.PlanID != "p_1" || !pd.Done || !pd.Merged || pd.Summary != "all todos green" {
+		t.Errorf("replayed payload = %+v, want the fields the old log carried", *pd)
+	}
+	// The alias is for reading, not writing: the live event must emit the new
+	// name, or the rename never actually happened.
+	if got := pd.Type(); got != "coord.plan.done" {
+		t.Errorf("PlanDoneEvent.Type() = %q, want coord.plan.done — the legacy alias must not become the name we publish", got)
+	}
 }
