@@ -523,7 +523,7 @@ func (e *UserPreferenceEvent) Type() Topic      { return "user.preference" }
 func (e *UserPreferenceEvent) CausalID() TaskID { return TaskID(e.Task) }
 
 // --- L-user: slash commands (TUI interactive) ---
-//
+
 // UserCommandEvent carries a parsed slash command (e.g. /model, /provider) from
 // the TUI to the driver, which performs the runtime action (swap provider) and
 // responds with a CommandResponseEvent. The TUI intercepts /help, /clear,

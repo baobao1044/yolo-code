@@ -58,12 +58,6 @@ func (f *recordingPublisher) Publish(ctx context.Context, e event.Event) error {
 	return f.delegate.Publish(ctx, e) // forward to the bus so the loop sees it
 }
 
-func (f *recordingPublisher) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.log)
-}
-
 // fakeRunner is an AgentRunner that publishes a scripted response per role.
 // It publishes to the BUS (EventPublisher) so the orchestrator's event loop —
 // which subscribed coord.> on the same bus — receives the agent events. The

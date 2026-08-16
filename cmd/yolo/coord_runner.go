@@ -175,7 +175,7 @@ func (r *runtimeAgentRunner) buildRuntimeDeps(ctx context.Context, task event.Ta
 		return runtime.Deps{}, err
 	}
 
-	var cogProv cognitive.Provider = r.provider
+	cogProv := r.provider
 	if body, ok := r.patches[task.TodoID]; ok {
 		path := firstArtifact(task.Artifacts, task.Brief)
 		cogProv = &patchToolProvider{path: path, body: body}

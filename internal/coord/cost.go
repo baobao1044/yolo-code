@@ -29,9 +29,12 @@ import (
 // agent turn consults it before dispatch so a runaway plan aborts at the
 // deadline rather than spending unboundedly.
 type Budget struct {
-	id      event.TaskID
-	ledger  CostLedger
-	mu      sync.Mutex
+	id     event.TaskID
+	ledger CostLedger
+	// id and ledger are write-once at construction and the two mutating
+	// operations are each guarded by their own Once, so there is no shared
+	// state left for a mutex to protect. One used to sit here unlocked, which
+	// reads as synchronisation and provides none.
 	regOnce sync.Once
 	endOnce sync.Once
 }

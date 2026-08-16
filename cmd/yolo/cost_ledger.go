@@ -79,7 +79,9 @@ func newCostLedgerTo(w io.Writer) runtime.CostLedger {
 	// the one configuration where the ledger exists, reports no problem, and
 	// enforces nothing.
 	if maxDollars > 0 && perToken <= 0 {
-		fmt.Fprintf(w, "yolo: %s=%g cannot fire without %s: tokens have no dollar value, "+
+		// Diagnostics only. If the warning writer itself fails there is
+		// nowhere left to say so, and the run must not abort over it.
+		_, _ = fmt.Fprintf(w, "yolo: %s=%g cannot fire without %s: tokens have no dollar value, "+
 			"so spend stays at $0 all run. Set %s to the dollars one token costs, "+
 			"or use %s for a cap that works on its own.\n",
 			maxCostEnv, maxDollars, tokenRateEnv, tokenRateEnv, maxTimeEnv)
@@ -121,7 +123,7 @@ func warnDiscardedKnob(w io.Writer, key string, discarded bool, want string) {
 	if raw == "" || !discarded {
 		return
 	}
-	fmt.Fprintf(w, "yolo: ignoring %s=%q: expected %s. This run has no %s limit.\n",
+	_, _ = fmt.Fprintf(w, "yolo: ignoring %s=%q: expected %s. This run has no %s limit.\n",
 		key, raw, want, key)
 }
 

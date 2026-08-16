@@ -61,22 +61,6 @@ func (e *busEnv) collect(n int) (stage []*event.VerificationStageEvent, fail []*
 	return
 }
 
-// collectAll drains until the channel goes quiet for `quiet` with no new event,
-// then returns everything seen. Used when the count isn't known up front.
-func (e *busEnv) collectAll(quiet time.Duration) (stage []*event.VerificationStageEvent, fail []*event.VerificationFailedEvent) {
-	for {
-		select {
-		case env, ok := <-e.ch:
-			if !ok {
-				return
-			}
-			stage, fail = appendEnv(env, stage, fail)
-		case <-time.After(quiet):
-			return
-		}
-	}
-}
-
 func appendEnv(env event.Envelope, stage []*event.VerificationStageEvent, fail []*event.VerificationFailedEvent) ([]*event.VerificationStageEvent, []*event.VerificationFailedEvent) {
 	switch ev := env.Evt.(type) {
 	case *event.VerificationStageEvent:

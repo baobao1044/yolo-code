@@ -175,7 +175,7 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (<-chan 
 	out := make(chan Chunk, 64)
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		p.parseSSE(ctx, resp.Body, out)
 	}()
 
@@ -210,7 +210,7 @@ func (p *OpenAICompatProvider) post(ctx context.Context, body chatRequest, inclu
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, &apiStatusError{code: resp.StatusCode, body: string(errBody)}
 	}
 	return resp, nil
@@ -262,10 +262,19 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 	}
 	partials := make(map[int]*partialCall)
 
-	// [DONE] is the SSE framing sentinel; finish_reason is the model's own
-	// statement that it stopped generating. Track both so the end-of-body
-	// handler can tell a stream that ended on purpose from one that was cut off.
-	sawDone, sawFinish := false, false
+	// finish_reason is the model's own statement that it stopped generating.
+	// The end-of-body handler needs it to tell a stream that ended on purpose
+	// from one that was cut off.
+	//
+	// [DONE] — the SSE framing sentinel — used to be tracked here in a second
+	// flag, but it never could be read: the [DONE] branch below returns from
+	// parseSSE outright, so reaching the tail already proves [DONE] never
+	// arrived and the flag was false at the only place it was consulted. The
+	// check there read `!sawDone && !sawFinish`, whose first half was a
+	// tautology dressed up as a condition. Keeping the flag would mean the next
+	// reader has to re-derive that to know whether the check is sound; the
+	// invariant is written into the comment on the check instead.
+	sawFinish := false
 
 	// flushToolCalls emits all accumulated tool calls as Chunks, in ascending
 	// wire index. Ranging the map directly would emit them in Go's randomised
@@ -312,9 +321,11 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 
 		data := strings.TrimPrefix(line, "data: ")
 
-		// Terminal signal — flush any remaining tool calls.
+		// Terminal signal — flush any remaining tool calls. Returning here is
+		// what makes the truncation check at the end of the function correct
+		// without a [DONE] flag: the stream said it was finished, so there is
+		// nothing left to diagnose.
 		if data == "[DONE]" {
-			sawDone = true
 			flushToolCalls()
 			return
 		}
@@ -423,7 +434,10 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 	// erroring on that would break providers that work today. A truncation that
 	// cuts an HTTP chunk in half never reaches this branch either — the body
 	// read fails and scanner.Err() above reports it.
-	if !sawDone && !sawFinish {
+	//
+	// Reaching this line at all already means no [DONE] arrived, because that
+	// branch returns; the only open question left is finish_reason.
+	if !sawFinish {
 		select {
 		case out <- Chunk{Err: errors.New("sse stream ended without [DONE] or a finish_reason: the response was cut off mid-generation")}:
 		case <-ctx.Done():

@@ -69,8 +69,6 @@ type headlessDeps struct {
 	patcher  runtime.Patcher
 	restorer runtime.Restorer
 	repo     string
-	open     []string
-	window   int
 	memory   *memory.Store
 	memDir   string        // durable root the Store was opened on; non-empty means runHeadlessDeps owns Close (never a delete)
 	sessions session.Store // nil → the per-run FileStore below; set to reach the error paths a real disk only produces when it is full or read-only
@@ -354,15 +352,6 @@ func readPrompt(stdin io.Reader) string {
 	r := bufio.NewReader(stdin)
 	line, _ := r.ReadString('\n')
 	return strings.TrimSpace(line)
-}
-
-// cannedAnswer is the stubbed cognitive core's reply. In Sprint 1 it echoes the
-// goal so the transcript visibly carries the user's input end-to-end.
-func cannedAnswer(goal string) string {
-	if goal == "" {
-		return "hello"
-	}
-	return goal
 }
 
 // projectEnvelope renders the deterministic projection of an envelope: the

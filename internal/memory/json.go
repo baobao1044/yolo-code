@@ -40,27 +40,32 @@ func writeJSON(path string, v any) error {
 	}
 	name := tmp.Name()
 	// Past this point every failure removes the temp file and leaves the
-	// target exactly as it was.
+	// target exactly as it was. The cleanup's own errors are dropped on
+	// purpose, and spelled `_ =` so that is visible rather than inferred: the
+	// caller is about to be handed the failure that actually matters, and
+	// replacing it with "could not remove the scratch file" would report the
+	// consequence instead of the cause. A leaked temp file is dot-prefixed, so
+	// IndexRepo skips it and the next successful write does not trip over it.
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(name)
+		_ = tmp.Close()
+		_ = os.Remove(name)
 		return err
 	}
 	if err := tmp.Sync(); err != nil { // on disk before the rename publishes it
-		tmp.Close()
-		os.Remove(name)
+		_ = tmp.Close()
+		_ = os.Remove(name)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(name)
+		_ = os.Remove(name)
 		return err
 	}
 	if err := os.Chmod(name, 0o644); err != nil { // CreateTemp makes 0o600
-		os.Remove(name)
+		_ = os.Remove(name)
 		return err
 	}
 	if err := os.Rename(name, path); err != nil {
-		os.Remove(name)
+		_ = os.Remove(name)
 		return err
 	}
 	return nil

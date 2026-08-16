@@ -17,6 +17,7 @@
 package infra
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -131,10 +132,10 @@ func TestMetricsCardinalityDiscipline(t *testing.T) {
 // shutdown is a no-op for in-memory and idempotent.
 func TestMetricsShutdownIsIdempotent(t *testing.T) {
 	m := newMetrics(testConfig())
-	if err := m.shutdown(nil); err != nil {
+	if err := m.shutdown(context.Background()); err != nil {
 		t.Fatalf("first shutdown: %v", err)
 	}
-	if err := m.shutdown(nil); err != nil {
+	if err := m.shutdown(context.Background()); err != nil {
 		t.Fatalf("second shutdown: %v (should be idempotent)", err)
 	}
 }

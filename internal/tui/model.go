@@ -208,13 +208,6 @@ func newModel(sub <-chan event.Envelope, pub EventPublisher) Model {
 	}
 }
 
-// inputValue returns the input line's current text (Phase B backward-compat).
-// It reads from the bubbles/textinput widget; callers that used m.inputText
-// now call m.inputValue() so the pure test path stays widget-agnostic.
-func (m Model) inputValue() string {
-	return m.input.Value()
-}
-
 // setInput replaces the input line's text and moves the cursor to the end
 // (Phase B backward-compat for tests that drive the widget directly).
 func (m *Model) setInput(s string) {

@@ -147,15 +147,11 @@ func (p *Permissions) Elevate(r policyRule) error {
 	return nil
 }
 
-// isWrite reports whether an action mutates state (§13.8.2 read-only gate).
-func isWrite(a Action) bool {
-	return a == ActFileWrite || a == ActFileDelete || a == ActCmdExec
-}
-
 // isRead reports whether an action is one of the known non-mutating ones — the
-// allowlist read-only mode gates on. Deliberately an allowlist, not !isWrite():
-// a new Action must be classified here to be permitted in read-only mode, so
-// forgetting to classify it denies rather than allows.
+// allowlist read-only mode gates on. Deliberately an allowlist rather than the
+// negation of a mutates-state predicate: a new Action must be classified here
+// to be permitted in read-only mode, so forgetting to classify it denies rather
+// than allows. (The negated form was written first and is gone for that reason.)
 func isRead(a Action) bool {
 	return a == ActFileRead
 }

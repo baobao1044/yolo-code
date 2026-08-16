@@ -278,7 +278,7 @@ func Replay(path string) ([]Envelope, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only replay; nothing to flush
 
 	dec := json.NewDecoder(f)
 	var out []Envelope

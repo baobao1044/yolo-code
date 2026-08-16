@@ -379,7 +379,11 @@ func TestDefaultRedactorIsShared(t *testing.T) {
 	if DefaultRedactor() == nil {
 		t.Fatal("DefaultRedactor returned nil")
 	}
-	if DefaultRedactor() != DefaultRedactor() {
+	// Bound to locals rather than compared inline: `f() != f()` is the shape
+	// staticcheck reads as a typo for a self-comparison, and the two calls
+	// being distinct is the whole point of the assertion.
+	first, second := DefaultRedactor(), DefaultRedactor()
+	if first != second {
 		t.Error("DefaultRedactor returned two different registries")
 	}
 	bus := event.New()

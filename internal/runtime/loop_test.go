@@ -61,7 +61,6 @@ func (*patchCognitive) Reset()                                  {}
 // applyExecutor is an Executor that always dispatches (no approval needed) and
 // records the observation as from-a-patch so VERIFY inspects the touched files.
 type applyExecutor struct {
-	approved bool
 	dispatch int
 	obs      Observation
 }

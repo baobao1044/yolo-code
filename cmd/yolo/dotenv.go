@@ -31,7 +31,7 @@ func LoadDotEnv(path string) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only; a Close error says nothing new
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

@@ -298,16 +298,6 @@ func (m *Manager) task(tid TaskID) (*Task, error) {
 	return t, nil
 }
 
-// saveTask persists a task the caller has not just mutated: it snapshots under
-// m.mu and hands the copy to the store. See (*Task).clone for why the copy
-// rather than the lock.
-func (m *Manager) saveTask(ctx context.Context, t *Task) error {
-	m.mu.Lock()
-	snap := t.clone()
-	m.mu.Unlock()
-	return m.store.SaveTask(ctx, snap)
-}
-
 // LoadTaskPublic returns the live task handle for a known task, or nil if
 // unknown. It is the public face of the internal task lookup.
 //

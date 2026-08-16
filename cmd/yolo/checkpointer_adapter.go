@@ -163,7 +163,9 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	// Read side: a Close error on a file we only read carries no information
+	// the copy did not already report, so it is dropped explicitly.
+	defer func() { _ = in.Close() }()
 
 	fi, err := in.Stat()
 	if err != nil {
@@ -180,12 +182,18 @@ func copyFile(src, dst string) error {
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
+		// Already failing; the deferred Remove is what cleans up, and this
+		// Close only releases the descriptor. Its error would displace the
+		// real one.
+		_ = tmp.Close()
 		return err
 	}
 	// Before the rename, so dst is never observable with the wrong mode.
 	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
-		tmp.Close()
+		// Already failing; the deferred Remove is what cleans up, and this
+		// Close only releases the descriptor. Its error would displace the
+		// real one.
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

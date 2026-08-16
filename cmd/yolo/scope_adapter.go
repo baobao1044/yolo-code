@@ -35,19 +35,9 @@ func scopeLevelToRuntime(l scope.Level) runtime.ScopeLevel {
 	return runtime.ScopeLevel(l)
 }
 
-func runtimeActionToScope(a runtime.ScopeAction) scope.Action {
-	switch a {
-	case runtime.ScopeActionExpand:
-		return scope.ActionExpand
-	case runtime.ScopeActionContract:
-		return scope.ActionContract
-	case runtime.ScopeActionStay:
-		return scope.ActionStay
-	default:
-		return scope.ActionNoOp
-	}
-}
-
+// Only the scope→runtime direction exists. The inverse was written for
+// symmetry and never called: the runtime asks the controller what to do and
+// reads the answer back, so actions only ever travel outward.
 func scopeActionToRuntime(a scope.Action) runtime.ScopeAction {
 	switch a {
 	case scope.ActionExpand:

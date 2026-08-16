@@ -289,8 +289,8 @@ func (k *KnowledgeStore) Load(_ context.Context) error {
 		texts[i] = it.Text
 	}
 	vecs, _ := k.embed.Embed(context.Background(), texts)
-	for i := range vecs {
-		k.vectors[i] = vecs[i]
-	}
+	// A short return from Embed leaves the tail nil rather than panicking;
+	// copy stops at the shorter of the two.
+	copy(k.vectors, vecs)
 	return nil
 }

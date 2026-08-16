@@ -75,9 +75,7 @@ func splitClauses(goal string) []string {
 func splitAnd(parts []string) []string {
 	var out []string
 	for _, p := range parts {
-		for _, s := range strings.Split(p, " and ") {
-			out = append(out, s)
-		}
+		out = append(out, strings.Split(p, " and ")...)
 	}
 	return out
 }
