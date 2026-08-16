@@ -12,7 +12,9 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -61,6 +63,27 @@ func (s *ExecHistoryStore) Persist(_ context.Context, tid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return writeJSON(s.path(tid), s.tasks[tid])
+}
+
+// persistAll writes every cached task's entries. Store.Flush calls it on
+// shutdown/checkpoint so an interrupted run still leaves its audit trail; the
+// per-task Persist stays the listener's path. Tasks are written in sorted
+// order (S5) and one failure doesn't stop the rest.
+func (s *ExecHistoryStore) persistAll(ctx context.Context) error {
+	s.mu.Lock()
+	tids := make([]string, 0, len(s.tasks))
+	for tid := range s.tasks {
+		tids = append(tids, tid)
+	}
+	s.mu.Unlock()
+	sort.Strings(tids)
+	var errs []error
+	for _, tid := range tids {
+		if err := s.Persist(ctx, tid); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Load re-reads the task's entries into the warm cache. seqCounter is rebuilt

@@ -18,6 +18,9 @@ package memory
 
 import (
 	"context"
+	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,7 +103,7 @@ func TestListenerAppendsToolResult(t *testing.T) {
 }
 
 func TestListenerInvalidatesOnPatchApplied(t *testing.T) {
-	// patch.applied → ProjectStore.Invalidate(paths) + SemanticStore.Reindex.
+	// patch.applied → ProjectStore.Invalidate(paths) + LexicalStore.Reindex.
 	s, bus := newListenerStore(t)
 	ch := bus.Subscribe(event.Topic("memory.update"))
 
@@ -245,8 +248,82 @@ func TestListenerSetsPreferenceOnUserPreference(t *testing.T) {
 	}
 }
 
+// TestListenerReportsAFailedPreferenceWrite pins the one arm that reports its
+// own failure, and the reason it is the only one.
+//
+// Every other arm records something derived — an insight inferred from a
+// verification, a working-memory field tracked off a state change. Losing one
+// degrades recall quietly and there is nobody to tell. A preference is a direct
+// instruction the user just typed, and until this arm reported, a failed write
+// returned ("", 0): no memory.update, no error, no log. The user was told
+// "preference: style = tabs" by the slash command, the disk write failed, and
+// they found out weeks later when the agent kept doing the thing they had asked
+// it to stop doing.
+func TestListenerReportsAFailedPreferenceWrite(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(Deps{Root: root, Bus: event.New()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	bus := s.bus
+	t.Cleanup(func() {
+		_ = os.Chmod(root, 0o700) // let TempDir's cleanup remove it again
+		_ = bus.Close()
+		_ = s.Close()
+	})
+
+	// Make the store's directory unwritable so writeJSON fails for real, rather
+	// than injecting a fake error into a seam the production path does not use.
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	// Precondition, checked rather than assumed. Running as root ignores the
+	// mode bits entirely, and this test would then be green while proving
+	// nothing at all — it would never reach the branch it exists to cover.
+	if err := s.Preferences().Set(context.Background(), "probe", "x"); err == nil {
+		t.Skip("a read-only directory is still writable here (running as root?), so the " +
+			"failure branch is unreachable in this environment")
+	}
+
+	errs := bus.Subscribe(event.Topic("error"))
+	bus.Publish(context.Background(), &event.UserPreferenceEvent{
+		Task: "t_1", Key: "style", Value: "tabs",
+	})
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case env, ok := <-errs:
+			if !ok {
+				t.Fatal("bus closed before the error arrived")
+			}
+			e, ok := env.Evt.(*event.ErrorEvent)
+			if !ok {
+				continue
+			}
+			if e.Layer != "memory" {
+				t.Errorf("Layer = %q, want memory", e.Layer)
+			}
+			if e.Code != "preference_write_failed" {
+				t.Errorf("Code = %q, want preference_write_failed", e.Code)
+			}
+			// The key has to be in the message. "could not save preference"
+			// alone leaves the user unable to tell which of their preferences
+			// was lost, which is most of what they need to know to retry.
+			if !strings.Contains(e.Msg, "style") {
+				t.Errorf("Msg = %q, want it to name the key that was lost", e.Msg)
+			}
+			return
+		case <-deadline:
+			t.Fatal("the preference write failed and nothing was published: the user was told " +
+				"the preference was recorded and it was not")
+		}
+	}
+}
+
 // TestListenerClearsWorkingOnTaskCompleted: task.completed → Working.Clear +
-// Knowledge.Record + persists Conversation/Exec/Knowledge (§11.3.1 + §11.5.1).
+// persists Conversation/Exec/Knowledge (§11.3.1). It records NO insight: see
+// TestListenerRecordsNoInsightOnTaskCompleted.
 func TestListenerClearsWorkingOnTaskCompleted(t *testing.T) {
 	s, bus := newListenerStore(t)
 	ch := bus.Subscribe(event.Topic("memory.update"))
@@ -267,8 +344,57 @@ func TestListenerClearsWorkingOnTaskCompleted(t *testing.T) {
 	if got := s.Working().State(); got != "" {
 		t.Errorf("after task.completed, Working.State = %q, want empty (cleared)", got)
 	}
-	// A success insight should have been recorded.
-	if all := s.Insights().All(); len(all) == 0 {
-		t.Error("task.completed recorded no Knowledge insight, want a success pattern")
+}
+
+// TestListenerRecordsNoInsightOnTaskCompleted: task.completed must NOT write a
+// Knowledge insight. The old handler recorded "task.completed: <task id>" — a
+// per-task-unique string that can never dedupe, can never be retrieved (it
+// shares no token with any future query), and is re-embedded at every Open. It
+// was pure unbounded growth. Two completed tasks must leave the store empty.
+func TestListenerRecordsNoInsightOnTaskCompleted(t *testing.T) {
+	s, bus := newListenerStore(t)
+	ch := bus.Subscribe(event.Topic("memory.update"))
+
+	bus.Publish(context.Background(), &event.TaskCompletedEvent{Task: "t_one"})
+	bus.Publish(context.Background(), &event.TaskCompletedEvent{Task: "t_two"})
+	drain(t, ch, 100*time.Millisecond)
+
+	if all := s.Insights().All(); len(all) != 0 {
+		t.Errorf("task.completed recorded %d insight(s) %+v, want 0 (a task id is not a lesson)", len(all), all)
 	}
+}
+
+// TestWorkingMemoryIsRaceFreeAgainstTheListener: Working memory's task/state are
+// written from the LISTENER goroutine (task.started / state.change /
+// task.completed), not from the drive loop, so a reader on any other goroutine
+// races them. WorkingMemory carried no mutex on the strength of the
+// single-writer invariant, which does not hold for these two fields. Run under
+// -race: this reports a DATA RACE on the unsynchronised struct.
+func TestWorkingMemoryIsRaceFreeAgainstTheListener(t *testing.T) {
+	s, bus := newListenerStore(t)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // the listener writes task/state via these events
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			bus.Publish(context.Background(), &event.TaskStartedEvent{Task: "t_race", Goal: "goal"})
+			bus.Publish(context.Background(), &event.StateChangeEvent{Task: "t_race", From: "plan", To: "exec"})
+			bus.Publish(context.Background(), &event.TaskCompletedEvent{Task: "t_race"})
+		}
+	}()
+	for r := 0; r < 3; r++ { // readers on other goroutines
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				_ = s.Working().Task()
+				_ = s.Working().State()
+				_ = s.Working().History()
+				s.Working().Append(Message{Role: RoleUser, Text: "turn"})
+				_ = s.Working().Fork("next")
+			}
+		}()
+	}
+	wg.Wait()
 }

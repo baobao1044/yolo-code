@@ -67,6 +67,15 @@ func (s *PreferenceStore) All(_ context.Context) (map[string]string, error) {
 	return out, nil
 }
 
+// Persist rewrites the preference file from the warm cache. Set already writes
+// on every change, so this is only the Flush path (a store whose map was
+// populated by Load and then edited in place still gets saved).
+func (s *PreferenceStore) Persist(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return writeJSON(s.path(), s.prefs)
+}
+
 // Load re-reads the preference file into the warm cache (cross-session resume).
 func (s *PreferenceStore) Load(_ context.Context) error {
 	s.mu.Lock()
@@ -77,6 +86,9 @@ func (s *PreferenceStore) Load(_ context.Context) error {
 			return nil // no file yet → empty prefs, not an error
 		}
 		return err
+	}
+	if p == nil {
+		p = make(map[string]string) // a literal `null` in the file decodes to nil
 	}
 	s.prefs = p
 	return nil

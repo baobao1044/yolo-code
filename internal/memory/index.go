@@ -1,7 +1,7 @@
 // Cold-start repo indexing (File 11 §11.7.5). IndexRepo walks the repo root,
 // skips vendored/generated/cache trees and oversized files, chunks each source
 // file (per-function for Go, fixed-window otherwise), and bulk-inserts the
-// chunks into the SemanticStore so the first turn already has RAG signal. The
+// chunks into the LexicalStore so the first turn already has RAG signal. The
 // walk is deterministic (filepath.WalkDir visits entries in lexical order) so
 // two runs over the same tree produce byte-identical indexes (S5 — the
 // headless transcript stays reproducible).
@@ -43,7 +43,7 @@ const maxFileBytes = 1 << 20
 // displays clean repo-relative paths. Returns the number of chunks indexed.
 // Best-effort: a read error on one file is skipped (the walk continues); a
 // nil store or empty root returns (0, nil).
-func IndexRepo(ctx context.Context, store *SemanticStore, root string) (int, error) {
+func IndexRepo(ctx context.Context, store *LexicalStore, root string) (int, error) {
 	if store == nil || root == "" {
 		return 0, nil
 	}
@@ -134,18 +134,16 @@ func isTextExt(name string) bool {
 // acquisitions). Embedding happens outside the lock (I/O + CPU work; no shared
 // state touched), then a single locked pass assigns ids and appends. A nil
 // embedder falls back to the default hash embedder (dim 384).
-func (s *SemanticStore) BulkInsert(ctx context.Context, chunks []Chunk) {
+func (s *LexicalStore) BulkInsert(ctx context.Context, chunks []Chunk) {
 	if len(chunks) == 0 {
 		return
 	}
-	if s.embed == nil {
-		s.embed = NewHashEmbedder(384)
-	}
+	emb := s.embedder() // installs the default under the lock (semantic.go)
 	texts := make([]string, len(chunks))
 	for i, c := range chunks {
 		texts[i] = c.Text
 	}
-	vecs, _ := s.embed.Embed(ctx, texts)
+	vecs, _ := emb.Embed(ctx, texts)
 	newVecs := make([]chunkVec, len(chunks))
 	for i, c := range chunks {
 		cv := chunkVec{path: c.Path, kind: c.Kind, name: c.Name, text: c.Text}

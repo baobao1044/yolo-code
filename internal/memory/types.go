@@ -79,10 +79,15 @@ type errNotFound struct{}
 
 func (errNotFound) Error() string { return "memory: not found" }
 
-// Embedder turns text into a fixed-dim float32 vector (File 11 §11.7.4). The
-// MVP default is a deterministic local embedder (L10-003) so the vector store is
-// offline-testable; a real OpenAI/Ollama embedder plugs behind this interface.
-// Memory imports only event + stdlib, so the embedder lives here (no infra SDK).
+// Embedder turns text into a fixed-dim float32 vector (File 11 §11.7.4). This
+// interface is the substitution seam for a REAL embedding model; the shipped
+// default (NewHashEmbedder) is not one — it hashes tokens into buckets, so its
+// vectors carry no meaning, only literal token overlap (see embed.go and the
+// semantic.go header). Everything above this interface — chunking, cosine,
+// top-k, eviction — is model-agnostic, so a hosted OpenAI/Ollama embedder can
+// be injected via Deps.Embedder and the retrieval becomes genuinely semantic
+// with no other change. Memory imports only event + stdlib, so the default
+// implementation lives here rather than behind an infra SDK.
 type Embedder interface {
 	// Embed returns one vector per input text, in order. An empty input returns
 	// an empty slice; a failed embedding returns an error (Retrieve degrades to

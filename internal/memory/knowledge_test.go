@@ -7,6 +7,7 @@ package memory
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -81,6 +82,80 @@ func TestKnowledgePersistLoadCrossSession(t *testing.T) {
 	parts := b.Retrieve(context.Background(), "Go project generics", 5)
 	if len(parts) != 2 {
 		t.Errorf("after Load, Retrieve = %d parts, want 2 (re-embedded on load)", len(parts))
+	}
+}
+
+// TestKnowledgeRecordIsCapped: the store is bounded at maxInsights. Without a
+// cap, knowledge.json grows monotonically for the life of the project and Open
+// re-embeds every entry, so the boot cost grows with it.
+func TestKnowledgeRecordIsCapped(t *testing.T) {
+	k := NewKnowledgeStore(t.TempDir(), NewHashEmbedder(64))
+	for i := 0; i < maxInsights+50; i++ {
+		k.Record(context.Background(), "lesson number "+strconv.Itoa(i), "verify.fail")
+	}
+	if got := len(k.All()); got != maxInsights {
+		t.Fatalf("All() = %d insights after %d Records, want the cap %d", got, maxInsights+50, maxInsights)
+	}
+	// LRU with no retrievals ⇒ oldest-first: the survivors are the newest 512.
+	if first := k.All()[0].Text; first != "lesson number 50" {
+		t.Errorf("oldest survivor = %q, want \"lesson number 50\" (the first 50 evicted)", first)
+	}
+}
+
+// TestKnowledgeEvictionKeepsRecentlyUsed: an insight the retrieval path has
+// returned (LastUsed bumped) outlives newer never-recalled ones. That is the
+// point of LRU over plain FIFO — the lesson the agent actually recalls is the
+// one worth its disk and its startup embedding.
+func TestKnowledgeEvictionKeepsRecentlyUsed(t *testing.T) {
+	k := NewKnowledgeStore(t.TempDir(), NewHashEmbedder(64))
+	k.Record(context.Background(), "zzzq unique cgo race token", "verify.fail")
+	// Recall it, so LastUsed is set.
+	if parts := k.Retrieve(context.Background(), "zzzq unique cgo race token", 1); len(parts) != 1 {
+		t.Fatalf("Retrieve = %d parts, want 1 (seeded insight)", len(parts))
+	}
+	for i := 0; i < maxInsights+10; i++ {
+		k.Record(context.Background(), "filler lesson "+strconv.Itoa(i), "verify.fail")
+	}
+	if got := len(k.All()); got != maxInsights {
+		t.Fatalf("All() = %d, want the cap %d", got, maxInsights)
+	}
+	for _, it := range k.All() {
+		if it.Text == "zzzq unique cgo race token" {
+			return
+		}
+	}
+	t.Error("the recalled insight was evicted while never-recalled fillers survived — eviction is not LRU")
+}
+
+// TestKnowledgeLoadTrimsAnOversizedFile: a knowledge.json written before the
+// cap existed must be trimmed on Load, BEFORE the re-embed — otherwise every
+// Open keeps paying for the historical bloat.
+func TestKnowledgeLoadTrimsAnOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	oversized := make([]Insight, 0, maxInsights+40)
+	for i := 0; i < maxInsights+40; i++ {
+		oversized = append(oversized, Insight{Text: "old lesson " + strconv.Itoa(i), Source: "verify.fail", Seq: i + 1})
+	}
+	if err := writeJSON(filepath.Join(dir, "knowledge.json"), oversized); err != nil {
+		t.Fatalf("writeJSON: %v", err)
+	}
+	k := NewKnowledgeStore(dir, NewHashEmbedder(64))
+	if err := k.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := len(k.All()); got != maxInsights {
+		t.Fatalf("after Load, All() = %d, want the cap %d", got, maxInsights)
+	}
+	// The trimmed set must round-trip: Persist writes the capped file back.
+	if err := k.Persist(context.Background()); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	var back []Insight
+	if err := readJSON(filepath.Join(dir, "knowledge.json"), &back); err != nil {
+		t.Fatalf("readJSON: %v", err)
+	}
+	if len(back) != maxInsights {
+		t.Errorf("knowledge.json holds %d insights after Persist, want the cap %d", len(back), maxInsights)
 	}
 }
 

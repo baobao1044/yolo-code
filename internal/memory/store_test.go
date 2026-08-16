@@ -123,7 +123,7 @@ func TestPreferenceStoreGetSetAll(t *testing.T) {
 func TestStoreOpensWithAllSubStores(t *testing.T) {
 	// The Store aggregate (§11.8) owns all six sub-stores. Open wires them; each
 	// accessor returns a non-nil store so a consumer (the composition root)
-	// never nil-panics. SemanticStore is a stub in L10-001 (populated in L10-003).
+	// never nil-panics. LexicalStore is a stub in L10-001 (populated in L10-003).
 	s, err := Open(Deps{Root: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
