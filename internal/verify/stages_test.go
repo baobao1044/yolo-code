@@ -37,6 +37,33 @@ func (r *fakeRunner) Run(ctx context.Context, name string, args ...string) (stri
 	return r.fn(name, args)
 }
 
+// blockingRunner models the one thing a real `go test` does that the instant
+// fake cannot: it keeps running until its context ends.
+//
+// testStage decides the cap fired by reading runCtx.Err() the moment the runner
+// returns, so with an instant runner the answer is a race against the runtime's
+// timer goroutine rather than a property of the stage. A one-nanosecond cap won
+// that race on Linux and lost it on Windows, whose timers round up to the
+// millisecond — the test then asserted the cap had fired when nothing had, and
+// it would have kept passing on Linux if the cap had been removed from the
+// stage entirely. Waiting on ctx.Done() makes the deadline the cause of the
+// return instead of a bet on scheduling.
+type blockingRunner struct{ calls []fakeCall }
+
+func (r *blockingRunner) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
+	r.calls = append(r.calls, fakeCall{ctx: ctx, name: name, args: append([]string(nil), args...)})
+	if name == "go" && len(args) > 0 && args[0] == "test" {
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			// Unreachable while the cap works. It is here so a regression that
+			// stops applying the cap fails the test on its assertions rather
+			// than wedging the whole package until the go test binary timeout.
+		}
+	}
+	return "", "", 0, nil
+}
+
 // callFor returns the recorded invocation of `name sub` (e.g. "go build"), or
 // nil if the stage never ran it.
 func callFor(calls []fakeCall, name, sub string) *fakeCall {
@@ -424,12 +451,12 @@ func TestTestTimeoutExceededIsAWarningNotAPass(t *testing.T) {
 	// A cap that fires is recorded as a warning (§9.3.6: a slow machine
 	// shouldn't veto a correct patch) — but it must be *recorded*. Before the
 	// fix the stage reported a clean pass no matter how long the tests took.
-	r := passRunner()
+	r := &blockingRunner{}
 	fs := fakeFS{"a.go": "package main\n\nfunc a() {}\n"}
 	e := NewEngine(Deps{Runner: r, FS: fs})
 
 	pol := fullPolicy()
-	pol.TestTimeout = time.Nanosecond // expires before the runner returns
+	pol.TestTimeout = 10 * time.Millisecond
 	v := e.Verify(context.Background(), Change{Task: "t_slow", Files: []string{"a.go"}}, pol)
 
 	if v.Severity != SevWarn {

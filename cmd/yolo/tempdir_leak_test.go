@@ -18,16 +18,62 @@ import (
 	"github.com/baobao1044/yolo-code/internal/event"
 )
 
-// tmpRootFor redirects TMPDIR at this test and returns the root to count under.
-// os.MkdirTemp("", …) re-reads TMPDIR on every call, so the count is scoped to
-// this test: a peer test's temp dirs can neither fail it nor fake it green. The
-// t.TempDir call is deliberately made before the Setenv — t.TempDir allocates
-// under TMPDIR itself, and it must not land inside the directory being counted.
+// tmpRootFor redirects the process temp dir at this test and returns the root
+// to count under. os.MkdirTemp("", …) re-reads it on every call, so the count
+// is scoped to this test: a peer test's temp dirs can neither fail it nor fake
+// it green. The t.TempDir call is deliberately made before the redirect —
+// t.TempDir allocates under the temp dir itself, and it must not land inside
+// the directory being counted.
 func tmpRootFor(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	t.Setenv("TMPDIR", root)
+	scopeTempDir(t, root)
 	return root
+}
+
+// scopeTempDir points os.TempDir at root for the duration of the test.
+//
+// TMPDIR alone is not enough. os.TempDir is per-platform: on Unix it reads
+// $TMPDIR, but on Windows it calls GetTempPath, which consults TMP, then TEMP,
+// then USERPROFILE — and never looks at TMPDIR. Setting only TMPDIR left the
+// redirect a silent no-op on Windows, so os.MkdirTemp kept allocating under the
+// runner's real temp dir and every count came back 0. The tests then failed for
+// a reason that had nothing to do with the leak they were written to catch.
+//
+// Setting all three keeps one helper honest on both platforms. Note this is
+// also why the count must be a Glob of a specific prefix rather than "how many
+// entries appeared": the redirect is process-wide.
+// The redirect is then verified rather than assumed. A silent no-op here does
+// not fail this helper, it fails a caller three assertions later with "made 0
+// dirs" — which reads as a leak-fix regression and is not one. Probing with the
+// same os.MkdirTemp("", …) call the production code makes means the check tests
+// the mechanism actually in use, not a proxy for it.
+func scopeTempDir(t *testing.T, root string) {
+	t.Helper()
+	t.Setenv("TMPDIR", root) // Unix
+	t.Setenv("TMP", root)    // Windows, first choice of GetTempPath
+	t.Setenv("TEMP", root)   // Windows, second choice
+
+	probe, err := os.MkdirTemp("", "yolo-scopeprobe-")
+	if err != nil {
+		t.Fatalf("scopeTempDir probe: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(probe) }()
+	if got, want := realpath(filepath.Dir(probe)), realpath(root); got != want {
+		t.Fatalf("scopeTempDir: os.MkdirTemp landed in %q, want %q — the temp-dir "+
+			"redirect did not take on this platform, so every count below would be 0 "+
+			"for a reason unrelated to what the test checks", got, want)
+	}
+}
+
+// realpath flattens symlinks and platform path spellings (macOS /var vs
+// /private/var, Windows 8.3 short names) so two paths naming the same directory
+// compare equal. A path that cannot be resolved is returned as given.
+func realpath(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return filepath.Clean(p)
 }
 
 // countTemp returns the directories matching pattern directly under root.

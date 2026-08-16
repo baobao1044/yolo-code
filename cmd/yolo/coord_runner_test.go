@@ -113,12 +113,13 @@ func TestSessionStoreIsRunScopedNotPerTodo(t *testing.T) {
 
 	t.Setenv("YOLO_MEMORY_DIR", memDir)
 	t.Setenv("YOLO_SESSION_DIR", sessDir)
-	// os.MkdirTemp("", …) re-reads TMPDIR on every call, so redirecting it here
-	// scopes the leak count to this test — a peer test's temp dirs can neither
-	// fail it nor fake it green. Set last: the t.TempDir calls above allocate
-	// under TMPDIR too, and they must not land inside the directory being
-	// counted.
-	t.Setenv("TMPDIR", tmpRoot)
+	// os.MkdirTemp("", …) re-reads the temp dir on every call, so redirecting it
+	// here scopes the leak count to this test — a peer test's temp dirs can
+	// neither fail it nor fake it green. Set last: the t.TempDir calls above
+	// allocate under the temp dir too, and they must not land inside the
+	// directory being counted. scopeTempDir, not a bare TMPDIR Setenv: Windows
+	// ignores TMPDIR entirely (see the note on the helper).
+	scopeTempDir(t, tmpRoot)
 
 	bus := event.New()
 	defer func() { _ = bus.Close() }()

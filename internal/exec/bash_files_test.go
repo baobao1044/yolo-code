@@ -16,6 +16,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,28 @@ func relFiles(t *testing.T, root string, files []string) []string {
 		rel = append(rel, r)
 	}
 	return rel
+}
+
+// chainCommands joins commands with the host shell's sequential separator.
+//
+// Bash.Run picks the interpreter per platform (shellInvocation: `sh -c` on
+// Unix, `cmd /c` on Windows) and the two do not agree on how to say "then".
+// cmd has no `;` — it is an ordinary argument character there, so a chain
+// written with it collapses into one command with the other segments as its
+// arguments. That is not a hypothetical: this file's three-outcome test ran as
+// a single `rm` over five nonexistent names with one redirect surviving, so it
+// reported one changed file instead of three and failed on Windows only.
+//
+// `&` is the sequential separator in cmd but means *background* in sh, which
+// would race the change detector's second walk, so this has to branch rather
+// than pick one spelling that parses everywhere. The rest of the package
+// already branches this way for the same reason (see groupSpawnScript).
+func chainCommands(cmds ...string) string {
+	sep := "; "
+	if isWindows() {
+		sep = " & "
+	}
+	return strings.Join(cmds, sep)
 }
 
 func wantExactly(t *testing.T, got []string, want ...string) {
@@ -149,7 +172,11 @@ func TestBashNamesEveryFileOfAMultiFileChange(t *testing.T) {
 	// One command, three outcomes. VERIFY checks the list and nothing else, so
 	// a detector that stopped at the first difference would leave two of these
 	// unverified.
-	out := runBash(t, b, "rm gone.txt; printf yy > kept.txt; printf zz > fresh.txt")
+	out := runBash(t, b, chainCommands(
+		"rm gone.txt",
+		"printf yy > kept.txt",
+		"printf zz > fresh.txt",
+	))
 
 	wantExactly(t, relFiles(t, root, out.Files), "fresh.txt", "gone.txt", "kept.txt")
 }
