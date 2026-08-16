@@ -217,6 +217,32 @@ func TestCostSnapshotDeadlineFromNewTask(t *testing.T) {
 	}
 }
 
+// TestCostZeroDeadlineRecordsNoDeadline is the other half of the test above. A
+// Cost.Deadline of zero means "no wall-clock cap", and NewTask used to add it
+// blindly, stamping a deadline of exactly time.Now(). Every reader comparing
+// against that saw the task as expired the moment it registered — and under
+// infra.Config{}, which startWithLog documents as a supported zero value, that
+// is every task. coord.Budget.CheckBeforeDispatch would then refuse the first
+// dispatch of every plan, on a budget nobody configured.
+//
+// cognitive.Cost had the identical bug in its own RegisterTask; this is the
+// twin. The reader side is guarded too (a zero deadline reads as "no cap"
+// rather than "elapsed"), because ok reports only that NewTask ran.
+func TestCostZeroDeadlineRecordsNoDeadline(t *testing.T) {
+	cfg := testConfig()
+	cfg.Cost.Deadline = 0
+	c := NewCost(cfg, newFakeLedger())
+	c.NewTask("t_1")
+
+	_, _, _, deadline, ok := c.Snapshot("t_1")
+	if !ok {
+		t.Fatal("Snapshot: ok=false, want true — the task was registered")
+	}
+	if !deadline.IsZero() {
+		t.Errorf("deadline = %v with Cost.Deadline 0, want the zero time (no wall-clock cap)", deadline)
+	}
+}
+
 // TestCostEndTaskIsNoOp pins the documented spec gap: EndTask removes nothing
 // (cognitive.Cost exposes no deletion API). After EndTask, Snapshot still
 // returns ok=true; calling EndTask on an unknown id does not panic.

@@ -99,6 +99,45 @@ func TestRateLimiterCanceledContextReturnsFalseWithoutConsume(t *testing.T) {
 	}
 }
 
+// TestRateLimiterUnconfiguredIsOffNotClosed pins the unset-cap reading: a zero
+// rate/burst — what infra.Config{} produces, and startWithLog documents the
+// zero Config as supported — means "no limit configured", so every call is
+// allowed. It used to mean "a limit of zero": the bucket seeded empty and could
+// never refill, so the limiter denied every call for the life of the process
+// and an unmeasured, unconfigured state was indistinguishable from a genuinely
+// exhausted one.
+func TestRateLimiterUnconfiguredIsOffNotClosed(t *testing.T) {
+	l := newRateLimiter(Config{})
+	for i := 0; i < 3; i++ {
+		wait, ok := l.Allow(context.Background(), "tool:ls")
+		if !ok {
+			t.Fatalf("call %d: ok=false — an unconfigured limiter throttled a call", i+1)
+		}
+		if wait != 0 {
+			t.Fatalf("call %d: wait=%v, want 0 (no limit configured)", i+1, wait)
+		}
+	}
+}
+
+// TestRateLimiterNeverReturnsNegativeWait pins the contract Allow documents:
+// `wait` is a duration the caller sleeps before retrying. With rate=0 the old
+// (1-tokens)/rate was +Inf, and the Duration conversion wrapped it to
+// -2562047h47m16s — a caller obeying the contract slept a negative duration and
+// hot-spun. A partially-configured limiter (one of the two fields set) hit the
+// same path.
+func TestRateLimiterNeverReturnsNegativeWait(t *testing.T) {
+	for _, c := range []struct{ rate, burst float64 }{{0, 0}, {0, 10}, {2, 0}, {-1, -1}} {
+		cfg := Config{}
+		cfg.RateLimit.Rate, cfg.RateLimit.Burst = c.rate, c.burst
+		l := newRateLimiter(cfg)
+		for i := 0; i < 3; i++ {
+			if wait, _ := l.Allow(context.Background(), "k"); wait < 0 {
+				t.Errorf("rate=%v burst=%v call %d: wait=%v, want >= 0", c.rate, c.burst, i+1, wait)
+			}
+		}
+	}
+}
+
 // TestRateLimiterIndependentKeys pins §13.9.2: bucket keys are isolated per
 // §13.9.2's key scheme (llm:<provider> / tool:<name> / mcp:<server>).
 // Draining llm:openai's bucket leaves tool:ls's bucket full — the two keys

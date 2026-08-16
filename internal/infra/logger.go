@@ -63,7 +63,12 @@ func newLogProjector(cfg Config, w io.Writer) *logProjector {
 		slog.String("host.id", cfg.HostID),
 		slog.String("version", cfg.Version),
 	)
-	return &logProjector{log: log}
+	// Redaction on by default: the seam used to start nil, so a projector built
+	// outside Start wrote unredacted lines and looked correct while doing it.
+	// The boundary must fail closed. Start overwrites this with the aggregate's
+	// registry (the same value); a caller that genuinely wants raw lines opts
+	// out by setting redactor to nil explicitly.
+	return &logProjector{log: log, redactor: DefaultRedactor()}
 }
 
 // projectLog writes one DEBUG line for env (§13.5.2): topic + task + the

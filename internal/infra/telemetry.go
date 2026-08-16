@@ -43,6 +43,16 @@ type Span struct {
 	Attrs        map[string]any
 }
 
+// spanRedactor masks secret-bearing values before they are recorded on a span
+// (§13.7.3, fourth boundary). Two methods because a span takes strings by two
+// routes: Project's attribute map, and EndRoot's error text. *Secrets satisfies
+// both, exactly as it satisfies logRedactor and sentryRedactor — one registry,
+// every boundary.
+type spanRedactor interface {
+	RedactMap(map[string]any) map[string]any
+	Redact(string) string
+}
+
 // Telemetry projects events into spans. roots holds live task root spans keyed
 // by taskID; endedRoots + spans are the in-memory record available to tests.
 type Telemetry struct {
@@ -50,6 +60,10 @@ type Telemetry struct {
 	roots      map[string]*Span
 	endedRoots map[string]*Span
 	spans      []Span
+	// redactor masks secrets on the way into a span. Guarded by nothing: it is
+	// set once at construction and only ever overwritten by Start, before the
+	// root subscriber goroutine exists.
+	redactor spanRedactor
 }
 
 // newTelemetry constructs the in-memory stub tracer. cfg is accepted for the
@@ -60,6 +74,11 @@ func newTelemetry(cfg Config) *Telemetry {
 	return &Telemetry{
 		roots:      make(map[string]*Span),
 		endedRoots: make(map[string]*Span),
+		// Redaction on by default, for the reason logger.go records having
+		// learned the hard way: a seam that starts nil leaves anything built
+		// outside Start emitting raw values while looking correctly wired.
+		// Start overwrites this with the aggregate's registry (the same value).
+		redactor: DefaultRedactor(),
 	}
 }
 
@@ -88,7 +107,11 @@ func (t *Telemetry) EndRoot(taskID string, err error) {
 	if sp != nil {
 		if err != nil {
 			sp.Status = SpanStatusError
-			sp.ErrMsg = err.Error()
+			// The runtime hands this error in directly, so it never passed
+			// through eventAttrs — this is the one string on a span that
+			// Project's redaction does not cover. A provider auth failure is
+			// the likely case, and its text tends to quote the credential.
+			sp.ErrMsg = t.redact(err.Error())
 		} else if sp.Status == SpanStatusUnset {
 			sp.Status = SpanStatusOK
 		}
@@ -112,22 +135,46 @@ func (t *Telemetry) Project(ctx context.Context, env event.Envelope) {
 	sp := Span{
 		Name:         string(env.Evt.Type()),
 		ParentTaskID: "", // linkless unless a root is live
-		Attrs:        eventAttrs(env.Evt),
+		// Redacted here rather than at the exporter: eventAttrs is the whole
+		// event, JSON-decoded, so an assistant message quoting a key or a tool
+		// result carrying an env dump arrives in the clear. §13.7.3's other
+		// three boundaries all mask at the observer; this is the fourth.
+		Attrs: t.redactAttrs(eventAttrs(env.Evt)),
 	}
 	if hasRoot {
 		sp.ParentTaskID = taskID
 	}
 	if isErrorEvent(env.Evt.Type()) {
 		sp.Status = SpanStatusError
-		if m, ok := sp.Attrs["msg"]; ok {
-			if ms, ok := m.(string); ok {
-				sp.ErrMsg = ms
-			}
+		// attrKey("msg"), not "msg": eventAttrs has already applied the
+		// §13.3.3 renames, so the literal key this used to read never exists
+		// and every error span went out marked Error with a blank message.
+		// Going through attrKey keeps the two in step if the rename changes.
+		if ms, ok := sp.Attrs[attrKey("msg")].(string); ok {
+			sp.ErrMsg = ms
 		}
 	}
 	t.mu.Lock()
 	t.spans = append(t.spans, sp)
 	t.mu.Unlock()
+}
+
+// redactAttrs masks secrets in a span's attribute map. A nil redactor passes
+// through — the explicit opt-out, same seam discipline as logProjector.
+func (t *Telemetry) redactAttrs(m map[string]any) map[string]any {
+	if t.redactor == nil {
+		return m
+	}
+	return t.redactor.RedactMap(m)
+}
+
+// redact masks secrets in one span string (EndRoot's error text). Nil-safe, as
+// above.
+func (t *Telemetry) redact(s string) string {
+	if t.redactor == nil {
+		return s
+	}
+	return t.redactor.Redact(s)
 }
 
 // Roots returns a snapshot of the live task root spans (taskID → *Span). Tests

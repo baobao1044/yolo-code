@@ -59,7 +59,13 @@ type SentryConfig struct {
 
 // PermissionsConfig configures the permissions model (File 13 §13.8).
 type PermissionsConfig struct {
-	Mode  string // "yolo" | "auto" | "ask" | "read-only"
+	Mode string // "yolo" | "auto" | "ask" | "read-only"
+	// Root is the workspace the default auto policy confines file.write /
+	// file.delete to (§13.8.3). The composition root sets it to the repository
+	// root; empty falls back to the process working directory. It replaces the
+	// literal "/repo" the policy used to hardcode, which matched no path on a
+	// real machine and so denied every genuine write.
+	Root  string
 	Rules []policyRuleConfig
 }
 

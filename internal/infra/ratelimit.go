@@ -43,7 +43,8 @@ type RateLimiter struct {
 
 // newRateLimiter builds a RateLimiter from the rate/burst in cfg. Buckets are
 // created lazily on first Allow for a key (seeded with `burst`), so an unused
-// key costs nothing.
+// key costs nothing. A non-positive rate or burst disables the limiter (see
+// Allow) rather than closing it.
 func newRateLimiter(cfg Config) *RateLimiter {
 	return &RateLimiter{
 		buckets: make(map[string]*bucket),
@@ -63,6 +64,20 @@ func (l *RateLimiter) Allow(ctx context.Context, key string) (time.Duration, boo
 	// first-call burst (§13.9.2 — cancel must not "burn" a token).
 	if err := ctx.Err(); err != nil {
 		return 0, false
+	}
+	// An unconfigured limiter is OFF, not shut. A zero rate/burst is what
+	// infra.Config{} produces — the zero Config startWithLog documents as
+	// supported — and reading it as "a limit of zero" inverted the seam: the
+	// bucket seeded empty, could never refill, and every Allow for the life of
+	// the process returned ok=false. The wait it handed back was worse than
+	// useless: (1-0)/0 is +Inf, and converting that to a Duration yields
+	// -2562047h47m16s, so a caller obeying the documented "sleep `wait` and
+	// retry" contract slept a negative duration and hot-spun forever on a
+	// throttle nobody asked for. An unset cap means no cap (the same reading
+	// cost_publisher.go's `maxCost > 0` guard already uses); a negative one is
+	// nonsense config and gets the same treatment rather than a nonsense wait.
+	if l.rate <= 0 || l.burst <= 0 {
+		return 0, true
 	}
 
 	l.mu.Lock()
