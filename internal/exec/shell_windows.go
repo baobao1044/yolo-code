@@ -101,6 +101,14 @@ func closeJob(job syscall.Handle) {
 // the parent directly. Bash.Run uses the job-based path (prepareJob/closeJob)
 // for reliable tree-kill; this exists so a future caller without a job still
 // gets a parent kill.
+//
+// Parity note for the Unix suicide guard (see shell_unix.go signalableGroup):
+// this path has no equivalent hole to plug, because it never signals a group —
+// it kills one known pid, which can never be our own. The hazard only appears
+// if someone reaches for GenerateConsoleCtrlEvent here: that API takes a
+// process-group id and treats 0 as "every process sharing this console",
+// which includes yolo itself. Anything added here must resolve a real,
+// foreign group id first, exactly as signalableGroup does.
 func killGroup(cmd *exec.Cmd) error {
 	if cmd.Process != nil {
 		_ = cmd.Process.Kill()

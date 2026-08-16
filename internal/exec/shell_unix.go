@@ -39,13 +39,33 @@ func closeJob(_ jobHandle) {}
 // parent (File 08 §8.4.7). The group signal is what kills children; the
 // parent kill is a backstop. Errors are ignored because the process may
 // already be dead by the time we signal (cancel raced with exit).
+//
+// The group signal is guarded, because it is a loaded gun pointed at us. If
+// Setpgid never took effect — a caller that skipped setProcessGroup, or a
+// setpgid that lost the race with the child's exec — then Getpgid(child)
+// returns *our own* pgid and kill(-pgid, SIGTERM) terminates the whole yolo
+// process group, agent included. Ignoring Getpgid's error was the same bug
+// with an extra step: it left pgid at 0, and kill(-0) means "my own group".
+// So we signal only a group that is demonstrably not ours (see
+// signalableGroup) and fall back to killing the child alone. That can orphan
+// grandchildren in the degraded case, which is strictly better than the agent
+// killing itself.
 func killGroup(cmd *exec.Cmd) error {
-	if cmd.Process != nil {
-		pgid, _ := syscall.Getpgid(cmd.Process.Pid)
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
-		return cmd.Process.Kill()
+	if cmd.Process == nil {
+		return nil
 	}
-	return nil
+	if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil && signalableGroup(pgid) {
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	}
+	return cmd.Process.Kill()
+}
+
+// signalableGroup reports whether pgid names a process group it is safe to
+// send a group signal to. Rejected: our own group (suicide), 0 (which kill(2)
+// reads as "the caller's group" — suicide again), 1 (init's group), and any
+// negative value (a Getpgid failure leaking through).
+func signalableGroup(pgid int) bool {
+	return pgid > 1 && pgid != syscall.Getpgrp()
 }
 
 // isWindows reports the host OS (used by bash.go to pick the shell). Always

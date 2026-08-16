@@ -119,14 +119,15 @@ func (n observationNormalizer) Normalize(out ToolOutput, meta Metadata) Observat
 	stderr, errTrunc := n.truncate(raw.Stderr, n.limits.StderrSoft, n.limits.StderrHard)
 
 	return Observation{
-		Stdout:    stdout,
-		Stderr:    stderr,
-		ExitCode:  out.ExitCode,
-		Summary:   deriveSummary(out, stdout, stderr),
-		Truncated: stdTrunc || errTrunc,
-		Bytes:     len(raw.Stdout) + len(raw.Stderr),
-		Files:     out.Files,
-		FromPatch: false, // set by the Patch Engine later (File 10)
+		Stdout:       stdout,
+		Stderr:       stderr,
+		ExitCode:     out.ExitCode,
+		Summary:      deriveSummary(out, stdout, stderr),
+		Truncated:    stdTrunc || errTrunc,
+		Bytes:        len(raw.Stdout) + len(raw.Stderr),
+		Files:        out.Files,
+		FilesUnknown: out.FilesUnknown, // dropping this would re-merge "don't know" into "nothing"
+		FromPatch:    false,            // set by the Patch Engine later (File 10)
 	}
 }
 

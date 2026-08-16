@@ -162,6 +162,92 @@ func TestCriticalRiskDeniedWithoutPrompt(t *testing.T) {
 	}
 }
 
+// TestPreApprovedCallSkipsTheSecondPrompt covers the double-prompt: two gates
+// guard the same dispatch — the runtime parks the FSM and asks, and then this
+// engine asks again for the same call — so the user had to press y twice for
+// one action, and the second question arrived with the FSM already unparked.
+// A call the layer above already got a yes for runs without prompting.
+func TestPreApprovedCallSkipsTheSecondPrompt(t *testing.T) {
+	tool := &riskyTool{name: "git", risk: RiskMedium}
+	eng, bus := newApprovalEngine(t, tool)
+	ch := bus.Subscribe("approval.request")
+
+	// No goroutine resolves anything here on purpose. If Dispatch prompts, it
+	// parks forever and the test hangs rather than quietly passing.
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Dispatch(context.Background(), ToolCall{
+			Tool: "git", Args: []byte(`{}`), PreApproved: true,
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Dispatch(pre-approved) = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Dispatch blocked on a pre-approved call — the engine asked a question the user already answered")
+	}
+	if !tool.ran {
+		t.Fatal("pre-approved tool did not run")
+	}
+	select {
+	case env := <-ch:
+		t.Fatalf("pre-approved call published approval.request (%v); that is the second prompt", env.Evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestPreApprovedDoesNotOverrideCriticalDenial pins the limit of the flag.
+// Pre-approval means "a human already answered the question this gate would
+// ask" — and for a critical tool the gate asks nothing, it refuses. A flag set
+// by an upstream caller must not become a way to run a forbidden tool.
+func TestPreApprovedDoesNotOverrideCriticalDenial(t *testing.T) {
+	tool := &riskyTool{name: "rm", risk: RiskCritical}
+	eng, _ := newApprovalEngine(t, tool)
+
+	_, err := eng.Dispatch(context.Background(), ToolCall{
+		Tool: "rm", Args: []byte(`{}`), PreApproved: true,
+	})
+	if err == nil {
+		t.Fatal("Dispatch(critical, pre-approved) = nil, want the critical denial")
+	}
+	if tool.ran {
+		t.Fatal("critical tool ran because the call was pre-approved — pre-approval is not an override")
+	}
+}
+
+// TestRiskOfNamesTheClassTheGateWouldUse exists because the layer that prompts
+// is not the layer that classifies: the runtime's approval.request went out
+// with an empty Risk, asking the user to approve something without saying how
+// dangerous it was. An unregistered tool reports low, matching NeedsApproval —
+// Dispatch rejects it on the registry lookup before any classification, so
+// there is no class to state.
+func TestRiskOfNamesTheClassTheGateWouldUse(t *testing.T) {
+	eng, _ := newApprovalEngine(t,
+		&riskyTool{name: "ls", risk: RiskLow},
+		&riskyTool{name: "git", risk: RiskMedium},
+		&riskyTool{name: "edit", risk: RiskHigh},
+		&riskyTool{name: "rm", risk: RiskCritical},
+	)
+	for _, tc := range []struct {
+		tool string
+		want event.Risk
+	}{
+		{"ls", RiskLow},
+		{"git", RiskMedium},
+		{"edit", RiskHigh},
+		{"rm", RiskCritical},
+		{"nosuchtool", RiskLow},
+	} {
+		if got := eng.RiskOf(ToolCall{Tool: tc.tool}); got != tc.want {
+			t.Errorf("RiskOf(%q) = %q, want %q", tc.tool, got, tc.want)
+		}
+	}
+}
+
 func TestCancelAbortsApprovalWait(t *testing.T) {
 	tool := &riskyTool{name: "git", risk: RiskMedium}
 	eng, _ := newApprovalEngine(t, tool)

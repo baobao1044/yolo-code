@@ -131,7 +131,12 @@ func groupSpawnScript(marker string) string {
 	}
 	// sh: background a grandchild that waits 3s then writes the marker; the
 	// shell itself sleeps 30s so it doesn't exit before the grandchild.
-	return `sh -c "(sleep 3 && touch ` + marker + `) & sleep 30"`
+	//
+	// No `sh -c` wrapper here: Bash.Run already runs the string under `sh -c`,
+	// and a nested interpreter with -c classifies critical, so the wrapper made
+	// Bash refuse the command outright — the test then "passed" without ever
+	// spawning anything, which is no test of tree-kill at all.
+	return `(sleep 3 && touch ` + marker + `) & sleep 30`
 }
 
 // keep event import used across tickets that accrete here.

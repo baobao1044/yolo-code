@@ -50,9 +50,12 @@ func (l *ListFiles) Run(_ context.Context, _ ToolInput) (ToolOutput, error) {
 		}
 		if d.IsDir() {
 			// Skip common non-source directories to keep output manageable.
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "vendor" ||
-				name == "__pycache__" || name == ".cache" || name == "dist" {
+			// The list is shared with the bash change detector (fschange.go) so
+			// the two walkers cannot drift apart. The path != root guard is
+			// load-bearing: a repository checked out at a directory named
+			// `dist` or `vendor` would otherwise be skipped whole and this tool
+			// would report an empty repository.
+			if path != root && skipWalkDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
