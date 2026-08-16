@@ -21,6 +21,12 @@ import (
 	"github.com/baobao1044/yolo-code/internal/prompt"
 )
 
+// StubLabel prefixes every stub response. The stub is a keyword matcher, and
+// without a marker its output reads exactly like a small model's — a user could
+// run a whole session believing they are talking to an LLM. The label makes the
+// difference visible in the transcript itself, not just in the startup log.
+const StubLabel = "[STUB PROVIDER — deterministic keyword matcher, NOT a real model]\n"
+
 // StubProvider is the golden-test provider: same Request → same []Chunk, every
 // run (S5). It derives the response from the last user message's keywords, so
 // a golden fixture's trace is a faithful function of its input.
@@ -44,8 +50,12 @@ func (s *StubProvider) Window() int { return s.window }
 // Stream generates a deterministic chunk sequence from the last user message
 // (File 15 §15.15.3). The response is a pure function of the input: the same
 // messages always produce the same chunks, so golden transcripts are stable.
+// The visible text always opens with StubLabel so the output is never mistaken
+// for a real model's. The label is prefixed onto the first text delta rather
+// than emitted as its own chunk, so the chunk/token count is unchanged and the
+// sequence stays a pure function of the input.
 func (s *StubProvider) Stream(ctx context.Context, req Request) (<-chan Chunk, error) {
-	chunks := s.respond(req)
+	chunks := labelStub(s.respond(req))
 	out := make(chan Chunk, len(chunks))
 	go func() {
 		defer close(out)
@@ -58,6 +68,20 @@ func (s *StubProvider) Stream(ctx context.Context, req Request) (<-chan Chunk, e
 		}
 	}()
 	return out, nil
+}
+
+// labelStub prefixes StubLabel onto the first chunk that carries visible text,
+// so every stub answer announces itself without changing how many chunks the
+// stream emits. If no chunk carries text (no branch does today), the label is
+// prepended as its own chunk so the marker is never dropped.
+func labelStub(chunks []Chunk) []Chunk {
+	for i, c := range chunks {
+		if c.Delta != "" {
+			chunks[i].Delta = StubLabel + c.Delta
+			return chunks
+		}
+	}
+	return append([]Chunk{{Delta: StubLabel}}, chunks...)
 }
 
 // respond is the pure input→chunks function. It scans the last user message

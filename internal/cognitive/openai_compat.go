@@ -12,6 +12,13 @@
 // OpenAI-native function/tool definitions in the chat completions request so
 // models that support structured tool calling emit
 // delta.tool_calls instead of inline tool tokens.
+//
+// The request also asks for token usage (stream_options.include_usage). A
+// server that honours it appends a final chunk carrying prompt/completion
+// counts; that is the only place a real token count exists, and without it
+// Turn.TokensIn/Out are guesses. Endpoints that refuse the field are handled by
+// a one-shot retry (see Stream) — asking for usage must never be the reason
+// yolo cannot talk to a provider.
 
 package cognitive
 
@@ -20,12 +27,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/baobao1044/yolo-code/internal/prompt"
@@ -39,6 +50,13 @@ type OpenAICompatProvider struct {
 	model      string
 	window     int
 	httpClient *http.Client
+
+	// noStreamOptions latches once an endpoint has refused stream_options, so
+	// the compatibility retry costs one wasted round trip per process instead
+	// of one per turn. Stream may be called from more than one goroutine
+	// (the TUI driver swaps providers, the coordinator runs agents), hence
+	// atomic rather than a plain bool.
+	noStreamOptions atomic.Bool
 }
 
 // NewOpenAICompatProvider builds a provider from explicit parameters. The
@@ -62,19 +80,25 @@ func NewOpenAICompatProvider(baseURL, apiKey, model string, window int) *OpenAIC
 }
 
 // OpenAICompatProviderFromEnv builds a provider from the standard
-// environment variables. Returns nil if YOLO_API_KEY is not set (so the
-// caller can fall back to the stub provider).
+// environment variables. Returns nil if no key resolves, so the caller can
+// report an unconfigured setup.
+//
+// OPENAI_API_KEY is OpenAI's credential, so it is only honoured when the base
+// URL is OpenAI's own host. Otherwise a user with OPENAI_API_KEY exported (very
+// common) who points YOLO_BASE_URL at a third-party endpoint would ship that
+// key to a host it was never issued for. YOLO_API_KEY is yolo-code's own var —
+// the user sets it alongside the base URL they chose — so it applies anywhere.
 func OpenAICompatProviderFromEnv() *OpenAICompatProvider {
+	baseURL := os.Getenv("YOLO_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
 	apiKey := os.Getenv("YOLO_API_KEY")
-	if apiKey == "" {
+	if apiKey == "" && isOpenAIEndpoint(baseURL) {
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 	if apiKey == "" {
 		return nil
-	}
-	baseURL := os.Getenv("YOLO_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
 	}
 	model := os.Getenv("YOLO_MODEL")
 	if model == "" {
@@ -87,6 +111,18 @@ func OpenAICompatProviderFromEnv() *OpenAICompatProvider {
 		}
 	}
 	return NewOpenAICompatProvider(baseURL, apiKey, model, window)
+}
+
+// isOpenAIEndpoint reports whether baseURL addresses OpenAI's own API. Host
+// match only — a path or scheme says nothing about who receives the bearer
+// token. An unparseable URL is treated as foreign (fail closed).
+func isOpenAIEndpoint(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "api.openai.com" || strings.HasSuffix(host, ".api.openai.com")
 }
 
 // Window returns the provider's context window size.
@@ -114,6 +150,47 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (<-chan 
 		body.Tools = buildToolDefs(req.Tools)
 	}
 
+	// Ask for the usage chunk unless this endpoint has already refused to
+	// accept the field. Most servers that don't implement stream_options simply
+	// ignore it and send no usage, which is handled downstream as "unknown".
+	includeUsage := !p.noStreamOptions.Load()
+	resp, err := p.post(ctx, body, includeUsage)
+	if err != nil && includeUsage && rejectsRequestBody(err) {
+		// The endpoint refused the request body itself. stream_options is the
+		// newest thing in it and the only field an older proxy is likely not to
+		// know, so drop it and try once more: a provider we can talk to without
+		// usage beats a provider we cannot talk to at all. If the second attempt
+		// also fails the field was not the problem, so report the original
+		// error — it describes the request we actually meant to send.
+		if retryResp, retryErr := p.post(ctx, body, false); retryErr == nil {
+			p.noStreamOptions.Store(true)
+			resp, err = retryResp, nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse SSE stream in a goroutine.
+	out := make(chan Chunk, 64)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+		p.parseSSE(ctx, resp.Body, out)
+	}()
+
+	return out, nil
+}
+
+// post sends one chat completions request and returns the streaming response
+// body, already checked for a non-200 status. includeUsage decides whether the
+// body carries stream_options; body is taken by value so setting it here does
+// not leak into the caller's retry.
+func (p *OpenAICompatProvider) post(ctx context.Context, body chatRequest, includeUsage bool) (*http.Response, error) {
+	if includeUsage {
+		body.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -132,20 +209,35 @@ func (p *OpenAICompatProvider) Stream(ctx context.Context, req Request) (<-chan 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("api returned %d: %s", resp.StatusCode, string(body))
+		return nil, &apiStatusError{code: resp.StatusCode, body: string(errBody)}
 	}
+	return resp, nil
+}
 
-	// Parse SSE stream in a goroutine.
-	out := make(chan Chunk, 64)
-	go func() {
-		defer close(out)
-		defer resp.Body.Close()
-		p.parseSSE(ctx, resp.Body, out)
-	}()
+// apiStatusError is a non-200 response from the endpoint. It exists so the
+// compatibility retry can tell "you sent me a body I can't parse" apart from
+// "your key is wrong" without matching on message text.
+type apiStatusError struct {
+	code int
+	body string
+}
 
-	return out, nil
+func (e *apiStatusError) Error() string {
+	return fmt.Sprintf("api returned %d: %s", e.code, e.body)
+}
+
+// rejectsRequestBody reports whether err is the endpoint saying it could not
+// make sense of what we sent, as opposed to an auth failure, a rate limit, or a
+// server fault. Only the former is worth retrying with a smaller body — a 401
+// retried is just two 401s and a confusing error message.
+func rejectsRequestBody(err error) bool {
+	var se *apiStatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.code == http.StatusBadRequest || se.code == http.StatusUnprocessableEntity
 }
 
 // parseSSE reads the SSE stream and emits Chunks. The OpenAI streaming
@@ -164,19 +256,37 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 
 	// Accumulate partial tool calls by index across SSE chunks.
 	type partialCall struct {
+		ID        string
 		Name      strings.Builder
 		Arguments strings.Builder
 	}
 	partials := make(map[int]*partialCall)
 
-	// flushToolCalls emits all accumulated tool calls as Chunks.
+	// [DONE] is the SSE framing sentinel; finish_reason is the model's own
+	// statement that it stopped generating. Track both so the end-of-body
+	// handler can tell a stream that ended on purpose from one that was cut off.
+	sawDone, sawFinish := false, false
+
+	// flushToolCalls emits all accumulated tool calls as Chunks, in ascending
+	// wire index. Ranging the map directly would emit them in Go's randomised
+	// map order, so a turn with parallel tool calls came out in a different
+	// order on every run — nondeterministic against the golden transcripts
+	// (S5), and it scrambles call↔result attribution for anything pairing by
+	// position. The wire index is the model's own ordering, so sort by it.
 	flushToolCalls := func() {
-		for idx, pc := range partials {
+		idxs := make([]int, 0, len(partials))
+		for idx := range partials {
+			idxs = append(idxs, idx)
+		}
+		sort.Ints(idxs)
+		for _, idx := range idxs {
+			pc := partials[idx]
 			name := pc.Name.String()
 			args := pc.Arguments.String()
 			if name != "" {
 				chunk := Chunk{
 					ToolCall: &ToolCall{
+						ID:     pc.ID,
 						Tool:   name,
 						Args:   []byte(args),
 						Reason: "",
@@ -204,6 +314,7 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 
 		// Terminal signal — flush any remaining tool calls.
 		if data == "[DONE]" {
+			sawDone = true
 			flushToolCalls()
 			return
 		}
@@ -212,6 +323,20 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			// Malformed chunk — skip it.
 			continue
+		}
+
+		// Usage rides its own chunk, emitted after the last content delta and
+		// before [DONE], and that chunk's choices array is EMPTY — the skip
+		// below would drop it on the floor, which is why Turn.TokensIn/Out were
+		// never assigned. Read it first. It is not conditional on choices being
+		// empty because some servers attach the counts to the finish chunk
+		// instead.
+		if u, ok := ev.Usage.usage(); ok {
+			select {
+			case out <- Chunk{Usage: &u}:
+			case <-ctx.Done():
+				return
+			}
 		}
 
 		if len(ev.Choices) == 0 {
@@ -239,6 +364,11 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 				if _, ok := partials[idx]; !ok {
 					partials[idx] = &partialCall{}
 				}
+				// The provider's call id arrives on the first fragment of each
+				// call; later fragments omit it. Keep the first one seen.
+				if tc.ID != "" && partials[idx].ID == "" {
+					partials[idx].ID = tc.ID
+				}
 				if tc.Function.Name != "" {
 					partials[idx].Name.WriteString(tc.Function.Name)
 				}
@@ -248,7 +378,13 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 			}
 		}
 
-		// If the model signals it's done with tool calls, flush them.
+		// Any finish_reason — "stop", "tool_calls", "length", "content_filter" —
+		// is the model saying it stopped, which is what the EOF check below needs
+		// to know. Only the two that end a turn with something to hand over
+		// trigger a flush.
+		if choice.FinishReason != "" {
+			sawFinish = true
+		}
 		if choice.FinishReason == "tool_calls" || choice.FinishReason == "stop" {
 			flushToolCalls()
 		}
@@ -271,16 +407,46 @@ func (p *OpenAICompatProvider) parseSSE(ctx context.Context, r io.Reader, out ch
 		case out <- Chunk{Err: fmt.Errorf("sse read: %w", err)}:
 		case <-ctx.Done():
 		}
+		return
+	}
+
+	// The body ended. If nothing in the stream ever said the generation had
+	// finished — no [DONE], no finish_reason — it was cut off, and no reader
+	// downstream can tell: Think returns Final=true with whatever the usage
+	// chunk carried, so a truncated turn is recorded as a complete, measured one
+	// and its short completion count is billed as a fact. This is the last place
+	// that is still knowable, so say it here.
+	//
+	// Only the absence of BOTH is fatal. A missing [DONE] on its own is a
+	// framing quirk of endpoints that simply close the connection, and the
+	// finish_reason they did send is the model's own statement that it stopped;
+	// erroring on that would break providers that work today. A truncation that
+	// cuts an HTTP chunk in half never reaches this branch either — the body
+	// read fails and scanner.Err() above reports it.
+	if !sawDone && !sawFinish {
+		select {
+		case out <- Chunk{Err: errors.New("sse stream ended without [DONE] or a finish_reason: the response was cut off mid-generation")}:
+		case <-ctx.Done():
+		}
 	}
 }
 
 // --- Wire types for the OpenAI chat completions API ---
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Tools    []chatTool    `json:"tools,omitempty"`
-	Stream   bool          `json:"stream"`
+	Model         string         `json:"model"`
+	Messages      []chatMessage  `json:"messages"`
+	Tools         []chatTool     `json:"tools,omitempty"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+// streamOptions carries the include_usage opt-in. It is a pointer on
+// chatRequest with omitempty so the retry path can send a body that has no
+// stream_options key at all, not one set to null — an endpoint strict enough to
+// reject the field is strict enough to reject a null too.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatMessage struct {
@@ -307,7 +473,8 @@ type chatStreamResponse struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
 			ToolCalls        []struct {
-				Index    int `json:"index"`
+				Index    int    `json:"index"`
+				ID       string `json:"id"` // the provider's tool_call_id
 				Function struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
@@ -315,6 +482,42 @@ type chatStreamResponse struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
+	Usage *chatUsage `json:"usage"` // nil on every chunk but the usage one
+}
+
+// chatUsage is the token count a server sends when the request asked for it via
+// stream_options.include_usage. The input_tokens/output_tokens spelling is what
+// Anthropic-shaped compatibility shims emit for the same two numbers; reading
+// only one spelling makes a whole class of endpoint look silent.
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+}
+
+// usage converts the wire object into a Usage, reporting false when there is
+// nothing to report. Two cases produce false: no usage object at all (the
+// server ignored stream_options), and an all-zero one — some local runners
+// attach a zeroed placeholder to every chunk, and no real request costs zero
+// prompt tokens, so believing it would manufacture exactly the confident 0 this
+// path exists to remove. A measured zero on ONE side (an empty completion) is
+// still a measurement and is reported.
+func (u *chatUsage) usage() (Usage, bool) {
+	if u == nil {
+		return Usage{}, false
+	}
+	in, out := u.PromptTokens, u.CompletionTokens
+	if in == 0 {
+		in = u.InputTokens
+	}
+	if out == 0 {
+		out = u.OutputTokens
+	}
+	if in == 0 && out == 0 {
+		return Usage{}, false
+	}
+	return Usage{TokensIn: in, TokensOut: out}, true
 }
 
 // toolDefs is the registry of tool schemas the provider can send to the model.
@@ -363,6 +566,26 @@ var toolDefs = map[string]chatTool{
 			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"regex pattern to search for"},"path":{"type":"string","description":"optional directory or file to search in (default: repo root)"}},"required":["pattern"]}`),
 		},
 	},
+}
+
+// DefaultTools returns the tool names the model is offered, sorted: exactly the
+// keys of toolDefs. The composition root passes it to New, and New derives the
+// Tool Policy's allowlist from what it is passed — so the schemas the provider
+// sends, the names the request advertises, and the names the Core will admit
+// are all one list read from one place. Adding a tool means adding a schema
+// above and nothing else; there is no second declaration to forget.
+//
+// The system prompt's prose list (internal/context) is the one copy this does
+// not reach. It is advisory — the model can only successfully call what is
+// admitted here — but it can still fall out of step, and there is no test that
+// would notice.
+func DefaultTools() []string {
+	names := make([]string, 0, len(toolDefs))
+	for n := range toolDefs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // buildToolDefs converts a list of tool names to OpenAI-format tool definitions.

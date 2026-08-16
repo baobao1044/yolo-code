@@ -191,3 +191,100 @@ func (p *trackingProvider) Window() int { return 128_000 }
 // ensure session import is used (reflTask references session.Task via the
 // helper above; keep the alias here to satisfy go vet's import order).
 var _ = session.Task{}
+
+// TestParseReflectionToleratesMarkdownAndPunctuation pins the minor defect: a
+// real model writes `DECISION: **abort**` or "DECISION: abort." — the exact
+// match rejected both and fell through to the default replan, so a
+// cost-controlled abort silently became another retry.
+func TestParseReflectionToleratesMarkdownAndPunctuation(t *testing.T) {
+	cases := []struct {
+		note  string
+		abort bool
+		patch bool
+	}{
+		{note: "root cause\nDECISION: **abort**", abort: true},
+		{note: "root cause\nDECISION: abort.", abort: true},
+		{note: "root cause\nDECISION: _Abort_", abort: true},
+		{note: "root cause\n**DECISION: abort**", abort: true},
+		{note: "root cause\nDECISION: `patch`", patch: true},
+		{note: "root cause\nDECISION: **patch** — retry the edit", patch: true},
+	}
+	for _, tc := range cases {
+		dec := parseReflection(tc.note)
+		if dec.Abort != tc.abort {
+			t.Errorf("parseReflection(%q).Abort = %v, want %v", tc.note, dec.Abort, tc.abort)
+		}
+		if got := len(dec.Patch.Body) > 0; got != tc.patch {
+			t.Errorf("parseReflection(%q) patch proposed = %v, want %v", tc.note, got, tc.patch)
+		}
+	}
+}
+
+// TestReflectionPatchCarriesPathAndBody pins the two things a patch decision
+// has to produce for the Patch Engine to have anything to do: which file, and
+// the blocks to apply. Before this the decision produced neither — Path did not
+// exist as a field and Body was the whole reflection, prose and DECISION line
+// included — so the composition root refused every corrective patch with
+// "missing target path" and never reached the validator.
+//
+// The tolerant matching mirrors the decision marker's, and for the same reason:
+// a real model writes `PATH: **x.go**` or "PATH: `x.go`", and an exact match
+// rejecting those would put the path back at "".
+func TestReflectionPatchCarriesPathAndBody(t *testing.T) {
+	const blocks = "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE"
+	cases := []struct {
+		name string
+		note string
+		path string
+		body string
+	}{
+		{
+			name: "plain",
+			note: "root cause\nPATH: internal/exec/read.go\nDECISION: patch\n```\n" + blocks + "\n```",
+			path: "internal/exec/read.go",
+			body: blocks,
+		},
+		{
+			name: "emphasised path and a fence info string",
+			note: "root cause\nPATH: **internal/exec/read.go**\nDECISION: patch\n```diff\n" + blocks + "\n```",
+			path: "internal/exec/read.go",
+			body: blocks,
+		},
+		{
+			name: "trailing prose after the path",
+			note: "PATH: read.go (the caller)\nDECISION: patch\n```\n" + blocks + "\n```",
+			path: "read.go",
+			body: blocks,
+		},
+		{
+			// The bare-note shape the mock provider and the scripted
+			// reflections emit. No path is a valid answer — the runtime reads
+			// it as "the files the failing verdict covered" — and the body
+			// falls back to the note rather than to nothing.
+			name: "no path, no fence",
+			note: "missing error check. DECISION: patch",
+			path: "",
+			body: "missing error check. DECISION: patch",
+		},
+		{
+			name: "unterminated fence falls back rather than guessing",
+			note: "PATH: a.go\nDECISION: patch\n```\n" + blocks,
+			path: "a.go",
+			body: "PATH: a.go\nDECISION: patch\n```\n" + blocks,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dec := parseReflection(c.note)
+			if dec.Replan || dec.Abort {
+				t.Fatalf("decision was not patch: replan=%v abort=%v", dec.Replan, dec.Abort)
+			}
+			if dec.Patch.Path != c.path {
+				t.Errorf("Path = %q, want %q", dec.Patch.Path, c.path)
+			}
+			if got := string(dec.Patch.Body); got != c.body {
+				t.Errorf("Body = %q, want %q", got, c.body)
+			}
+		})
+	}
+}

@@ -27,9 +27,16 @@ import (
 )
 
 // PatchOp is a corrective patch reflection may propose (File 07 §7.3.1). The
-// Patch Engine (File 10) gives it meaning; Sprint 3 carries it as a body
-// placeholder so the decision shape is preserved without that layer.
+// Patch Engine (File 10) gives it meaning.
+//
+// Path names the file to patch. It exists because without it the op could not
+// be applied at all: the composition root's patch adapter needs a target, takes
+// it from the tool-call JSON or from the runtime PatchOp's Path, and had
+// neither — so every corrective patch was refused with "missing target path"
+// before it reached the engine. An empty Path is still valid and means "the
+// files the failing verdict covered"; the runtime resolves it that way.
 type PatchOp struct {
+	Path string
 	Body []byte
 }
 
@@ -136,7 +143,78 @@ func (c *Core) reflectionPrompt(task *session.Task, v Verdict, obs Observation) 
 	b.WriteString("\nObservation: ")
 	b.WriteString(obs.Text)
 	b.WriteString("\n\nGive a root-cause analysis and end with a line 'DECISION: replan|patch|abort'.")
+	// If the answer is "patch", the two things the patch engine needs must be
+	// asked for, or the note is all there is to apply — which is what used to
+	// be handed to it.
+	b.WriteString("\nIf the decision is patch, also give a line 'PATH: <file>' naming the" +
+		" single file to change, and put the SEARCH/REPLACE blocks in a fenced code block.")
 	return []prompt.Message{{Role: "user", Content: b.String()}}
+}
+
+// decisionNoise is the markdown emphasis and punctuation real models wrap the
+// decision keyword in — `DECISION: **abort**`, "DECISION: abort.", DECISION:
+// `patch`. Matching the keyword exactly rejected all of those and fell through
+// to the default replan, so a model that clearly said abort got another retry.
+const decisionNoise = "*_`~'\"“”‘’.,;:!?()[]{}<>"
+
+// pathFromNote pulls the target file out of a "PATH: <file>" line, matched the
+// same tolerant way as the decision marker: case-insensitive, anywhere on its
+// line, with the emphasis and punctuation models wrap values in trimmed off.
+// Returns "" when the note names no file — a valid answer, meaning "the files
+// the failing verdict covered", which is how the runtime resolves an empty
+// target.
+func pathFromNote(note string) string {
+	const marker = "path:"
+	for _, line := range strings.Split(note, "\n") {
+		idx := strings.Index(strings.ToLower(line), marker)
+		if idx < 0 {
+			continue
+		}
+		p := strings.TrimSpace(line[idx+len(marker):])
+		// One path, first token — a trailing clause ("PATH: x.go (the caller)")
+		// is prose, not part of the name.
+		if sp := strings.IndexAny(p, " \t"); sp >= 0 {
+			p = p[:sp]
+		}
+		if p = strings.Trim(p, decisionNoise); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// patchBodyFromNote extracts the fenced code block a patch decision is supposed
+// to carry. The patch engine's validator expects SEARCH/REPLACE blocks, and
+// what it used to get was the entire reflection — root-cause prose, the
+// DECISION line and all — because the note was the body. That could only be
+// rejected.
+//
+// A note with no fence falls back to the whole note, which is the old
+// behaviour: the mock provider and the scripted reflections in the tests emit
+// bare notes, and a fenced-only rule would turn their patch decisions into
+// empty bodies. The fallback still cannot validate, but it fails where it
+// failed before rather than somewhere new.
+func patchBodyFromNote(note string) string {
+	const fence = "```"
+	start := strings.Index(note, fence)
+	if start < 0 {
+		return note
+	}
+	// Skip the opening fence and its info string ("```diff") to the newline
+	// that ends that line; a fence with no newline after it opens nothing.
+	nl := strings.IndexByte(note[start:], '\n')
+	if nl < 0 {
+		return note
+	}
+	rest := note[start+nl+1:]
+	end := strings.Index(rest, fence)
+	if end < 0 {
+		return note // unterminated fence: take the note rather than guess
+	}
+	if body := strings.TrimSpace(rest[:end]); body != "" {
+		return body
+	}
+	return note
 }
 
 // parseReflection parses the reflection note into a decision (File 07 §7.3.2):
@@ -160,11 +238,12 @@ func parseReflection(note string) ReflectionDecision {
 		if sp := strings.IndexByte(choice, ' '); sp >= 0 {
 			choice = choice[:sp]
 		}
+		choice = strings.Trim(choice, decisionNoise)
 		switch choice {
 		case "replan":
 			dec.Replan = true
 		case "patch":
-			dec.Patch = PatchOp{Body: []byte(note)}
+			dec.Patch = PatchOp{Path: pathFromNote(note), Body: []byte(patchBodyFromNote(note))}
 		case "abort":
 			dec.Abort = true
 		default:
@@ -247,7 +326,7 @@ func (c *Core) ReflectMulti(ctx context.Context, task *session.Task, v Verdict, 
 		// The note is the model's proposed corrective action; wrap it as the
 		// candidate patch body, mirroring the single-path patch decision.
 		cands = append(cands, PatchCandidate{
-			Patch:  PatchOp{Body: []byte(note)},
+			Patch:  PatchOp{Path: pathFromNote(note), Body: []byte(patchBodyFromNote(note))},
 			Reason: note,
 		})
 	}

@@ -3,6 +3,7 @@ package cognitive
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/baobao1044/yolo-code/internal/prompt"
@@ -105,6 +106,26 @@ func TestStubDefaultPromptDirectAnswer(t *testing.T) {
 	}
 	if turn.Text == "" {
 		t.Error("turn.Text empty, want the direct answer")
+	}
+}
+
+// TestStubOutputIsLabelledAsStub pins the anti-degradation rule: the stub's
+// visible output announces itself, on every branch, so a transcript can never
+// be mistaken for a real model's.
+func TestStubOutputIsLabelledAsStub(t *testing.T) {
+	for _, in := range []string{
+		"list the files in this repo",
+		"read @auth/login.go",
+		"fix the bug in main.go",
+		"explain what this does",
+	} {
+		var sb strings.Builder
+		for _, c := range mustRespond(t, in) {
+			sb.WriteString(c.Delta)
+		}
+		if !strings.HasPrefix(sb.String(), StubLabel) {
+			t.Errorf("%q: stub output = %q, want it to start with StubLabel", in, sb.String())
+		}
 	}
 }
 

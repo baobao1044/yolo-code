@@ -104,10 +104,40 @@ func NewCost(config CostConfig, pricer Pricer, bus *event.Bus) *Cost {
 // RegisterTask starts the ledger for a task and sets its deadline from MaxTime
 // (§7.6.1). Call at task start so the spend/time caps are measured from when
 // the task began, not first token.
+// A MaxTime of zero means "no wall-clock cap" and leaves the deadline zero.
+// Adding it blindly used to stamp a deadline of exactly now, so every reader
+// that compares against it saw the task as already expired the instant it
+// registered — a zero CostConfig killed tasks on their first turn.
+//
+// Idempotent: a second call for an id that already has an entry keeps that
+// entry. Replacing it zeroed the task's dollars and its loop/reflection counts
+// and re-stamped the deadline, so both hard caps started over on a task that
+// had already spent; and spend still accruing through a *taskCost pointer a
+// caller took from an earlier task() call landed on the orphaned entry, where
+// no cap would ever see it. infra.Cost.NewTask guards its own single
+// registration (internal/infra/cost.go), which kept this a trap rather than a
+// live abort — but the ledger is where the guarantee belongs.
 func (c *Cost) RegisterTask(id session.TaskID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.perTask[id] = &taskCost{deadline: time.Now().Add(c.config.MaxTime)}
+	if _, ok := c.perTask[id]; ok {
+		return
+	}
+	c.perTask[id] = c.newTaskCost()
+}
+
+// newTaskCost builds a fresh ledger entry with the deadline rule applied once,
+// so the two registration paths cannot stamp different deadlines. Both callers
+// reach it only for an id with no entry yet — RegisterTask returns early on a
+// live id, task() builds one only on a miss — so no accrued ledger is ever
+// replaced by a fresh one. Caller holds the mutex; c.config is read-only after
+// New.
+func (c *Cost) newTaskCost() *taskCost {
+	tc := &taskCost{}
+	if c.config.MaxTime > 0 {
+		tc.deadline = time.Now().Add(c.config.MaxTime)
+	}
+	return tc
 }
 
 // task returns the ledger entry for a task, registering one lazily if missing
@@ -117,7 +147,7 @@ func (c *Cost) task(id session.TaskID) *taskCost {
 	defer c.mu.Unlock()
 	tc, ok := c.perTask[id]
 	if !ok {
-		tc = &taskCost{deadline: time.Now().Add(c.config.MaxTime)}
+		tc = c.newTaskCost()
 		c.perTask[id] = tc
 	}
 	return tc
@@ -192,11 +222,18 @@ func (c *Cost) AddTokens(id session.TaskID, in, out int) {
 // ReflectionAllowed reports whether reflection may run for a task (File 07
 // §7.6.2): false once loops reach MaxLoops (only-verify mode), or when a hard
 // cap (spend, time) is crossed.
+//
+// A MaxLoops of zero means "no loop threshold", not "threshold already
+// reached". Every limit here is compared with >=, which is satisfied at zero,
+// so an unset MaxLoops used to make this predicate false from turn zero:
+// reflection was silently off for the whole task, with no cap configured and
+// nothing logged. Same rule as the deadline above and as MaxDollars below —
+// unset means off.
 func (c *Cost) ReflectionAllowed(id session.TaskID) bool {
 	tc := c.task(id)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if tc.loops >= c.config.MaxLoops {
+	if c.config.MaxLoops > 0 && tc.loops >= c.config.MaxLoops {
 		return false // only-verify mode
 	}
 	if tc.dollars >= c.config.MaxDollars && c.config.MaxDollars > 0 {
@@ -208,6 +245,44 @@ func (c *Cost) ReflectionAllowed(id session.TaskID) bool {
 	return true
 }
 
+// HardCapExceeded reports whether a task has crossed a cap that means stop, and
+// names the one that fired. The two hard caps are spend (MaxDollars) and wall
+// clock (MaxTime); a zero value for either disables that cap rather than
+// tripping it immediately.
+//
+// "A zero CostConfig caps nothing" is a claim about the whole controller, not
+// just this predicate, and it was false while every other limit here was
+// compared with a bare >=: HardCapExceeded answered false under CostConfig{}
+// while ReflectionAllowed and MultiCandidateAllowed both answered false from
+// turn zero, because `loops >= 0` and `reflections >= 0` hold before anything
+// has happened. Every rung in this file now guards its limit with `> 0`, so
+// the claim holds; pinned by TestZeroCostConfigCapsNothing, which asserts all
+// four predicates rather than this one.
+//
+// It exists because ReflectionAllowed cannot answer this question. That
+// predicate goes false for three different reasons, and one of them —
+// loops >= MaxLoops — is a *degradation* rung: §7.6.2 says the agent should
+// carry on with reflection disabled, not halt. A caller that reads
+// ReflectionAllowed as "stop" silently promotes MaxLoops (default 6) into a
+// hard iteration cap and kills tasks that were working correctly.
+//
+// The loop count is deliberately absent here: MaxLoops was tuned as a
+// degradation threshold, and a runaway drive loop is bounded by MaxTime, which
+// is a real limit somebody chose rather than an iteration count invented to
+// look like one.
+func (c *Cost) HardCapExceeded(id session.TaskID) (bool, string) {
+	tc := c.task(id)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.config.MaxDollars > 0 && tc.dollars >= c.config.MaxDollars {
+		return true, "spend cap"
+	}
+	if c.config.MaxTime > 0 && !tc.deadline.IsZero() && time.Now().After(tc.deadline) {
+		return true, "time cap"
+	}
+	return false, ""
+}
+
 // MultiCandidateAllowed reports whether the cost budget still permits
 // multi-candidate patch generation (File 07 §7.6.2). After MaxLoops is reached
 // the agent degrades to single-candidate (only-verify-adjacent) mode, one rung
@@ -217,11 +292,15 @@ func (c *Cost) ReflectionAllowed(id session.TaskID) bool {
 // is a strict subset of reflection — if reflection is hard-aborted, so is
 // multi-candidate) and reuses the same internal counters, adding the
 // MaxReflections rung.
+//
+// Zero on either rung means that rung is off, for the reason spelled out on
+// ReflectionAllowed: `>= 0` is true at zero, so an unset cap would read as an
+// exhausted one and multi-candidate would never run under a zero CostConfig.
 func (c *Cost) MultiCandidateAllowed(id session.TaskID) bool {
 	tc := c.task(id)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if tc.loops >= c.config.MaxLoops {
+	if c.config.MaxLoops > 0 && tc.loops >= c.config.MaxLoops {
 		return false // single-candidate (only-verify-adjacent) mode
 	}
 	if tc.dollars >= c.config.MaxDollars && c.config.MaxDollars > 0 {
@@ -230,7 +309,7 @@ func (c *Cost) MultiCandidateAllowed(id session.TaskID) bool {
 	if !tc.deadline.IsZero() && time.Now().After(tc.deadline) {
 		return false // time cap — reflection itself is off
 	}
-	if tc.reflections >= c.config.MaxReflections {
+	if c.config.MaxReflections > 0 && tc.reflections >= c.config.MaxReflections {
 		return false // single forced candidate (autosubmit, §7.6.4)
 	}
 	return true
