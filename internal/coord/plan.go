@@ -66,6 +66,20 @@ func (p *Plan) AllDone() bool {
 	return true
 }
 
+// FailedTodos returns the IDs of every todo in the Failed terminal state, in
+// plan order. AllDone counts Failed as terminal, so this is the only thing
+// separating a plan that finished from a plan that gave up — the orchestrator
+// uses it to decide whether Run reports success (File 12 §12.4.1).
+func (p *Plan) FailedTodos() []string {
+	var ids []string
+	for i := range p.Todos {
+		if p.Todos[i].Status == Failed {
+			ids = append(ids, p.Todos[i].ID)
+		}
+	}
+	return ids
+}
+
 // Todo returns a pointer to the todo with the given ID, or nil if absent.
 // Callers mutate the returned todo in place (File 12 §12.4.1 reassignCoder).
 func (p *Plan) Todo(id string) *Todo {

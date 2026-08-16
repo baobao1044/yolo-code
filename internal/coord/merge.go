@@ -18,12 +18,19 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
 // ErrConflict signals that two todos touched the same file and the merge
 // cannot combine them without the Patch Engine's three-way resolution.
 var ErrConflict = errors.New("coord: merge conflict — todos overlap on the same file")
+
+// ErrNotVerified signals that the Verifier seam rejected the combined diff.
+// Always wrapped with the merge's shape (done-todo count, diff size, leading
+// bytes) — "failed verification" on its own tells the caller nothing about
+// whether the patch was malformed, contentless, or merely rejected.
+var ErrNotVerified = errors.New("coord: merged patch failed verification")
 
 // MergedPatch is the orchestrator's merge output (File 12 §12.6): the combined
 // diff, a done/failed summary, any conflicts, and whether the verifier passed.
@@ -58,8 +65,16 @@ type MergeConflict struct {
 // artifact file; returns the verifier's error if re-verification fails.
 //
 // Failed todos are skipped (their diffs are not merged) but counted in the
-// summary. An empty / all-failed plan yields an empty patch that trivially
-// verifies (no verifier call).
+// summary, as are Done todos whose diff is missing or blank. A plan that is
+// empty, all-failed, or produced no patch at all yields an empty patch that
+// trivially verifies (no verifier call).
+//
+// A nil Verifier combines without re-verifying: Verified stays false and no
+// error is returned. That is the cancel path — the successful todos' work is
+// still worth combining and reporting, but re-running a verifier (in
+// production, the test suite) after the operator pressed Ctrl-C is not what
+// they asked for. Callers must read Verified, not "err == nil", as the
+// evidence that something checked the patch.
 func Merge(ctx context.Context, plan *Plan, diffs map[string]string, v Verifier) (MergedPatch, error) {
 	var mp MergedPatch
 
@@ -70,7 +85,14 @@ func Merge(ctx context.Context, plan *Plan, diffs map[string]string, v Verifier)
 		td := &plan.Todos[i]
 		if td.Status == Done {
 			mp.Summary.Done++
-			if d, ok := diffs[td.ID]; ok {
+			// Blank diffs are dropped, not joined. A Done todo that produced
+			// no patch contributes nothing, and joining it in would fabricate
+			// separator-only content no todo wrote ("\n\n" for three blank
+			// diffs) — non-empty enough to skip the trivial-verify path below,
+			// contentless enough for the verifier to then reject. "Carries no
+			// patch" has to mean the same thing here, at that short-circuit,
+			// and to the verifier.
+			if d := diffs[td.ID]; strings.TrimSpace(d) != "" {
 				combined = append(combined, d)
 			}
 			for _, f := range td.Artifacts {
@@ -100,13 +122,34 @@ func Merge(ctx context.Context, plan *Plan, diffs map[string]string, v Verifier)
 		return mp, nil
 	}
 
+	// No verifier wired: combine, report, and leave Verified false. Nothing
+	// checked this patch, and saying otherwise is the lie the whole Verified
+	// field exists to prevent.
+	if v == nil {
+		return mp, nil
+	}
+
 	ok, err := v.Verify(ctx, mp.CombinedDiff)
 	if err != nil {
-		return mp, err
+		return mp, fmt.Errorf("coord: verifier failed on %s: %w", mp.shape(), err)
 	}
 	mp.Verified = ok
 	if !ok {
-		return mp, errors.New("coord: merged patch failed verification")
+		return mp, fmt.Errorf("%w: verifier rejected %s", ErrNotVerified, mp.shape())
 	}
 	return mp, nil
+}
+
+// shape describes the combined diff for an error message: how many todos fed
+// it, how big it is, and its leading bytes. Enough to tell a contentless patch
+// apart from a genuinely rejected one without dumping a whole diff into a log.
+func (mp MergedPatch) shape() string {
+	const maxPreview = 120
+	preview := mp.CombinedDiff
+	suffix := ""
+	if len(preview) > maxPreview {
+		preview, suffix = preview[:maxPreview], "…"
+	}
+	return fmt.Sprintf("%d bytes from %d done todo(s), starting %q%s",
+		len(mp.CombinedDiff), mp.Summary.Done, preview, suffix)
 }

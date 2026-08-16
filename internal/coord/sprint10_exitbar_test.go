@@ -22,6 +22,7 @@ package coord
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -42,17 +43,19 @@ func (r *exitRunner) Run(ctx context.Context, role Role, task event.TaskAssignEv
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// The publish error is the runner's error: an agent whose event never
+	// reached the bus has not completed its turn (see fakeRunner).
 	switch role {
 	case RoleCoder:
-		_ = r.bus.Publish(ctx, &event.CodeReadyEvent{
+		return r.bus.Publish(ctx, &event.CodeReadyEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Diff: r.codeReady[task.TodoID], SelfReport: "done",
 		})
 	case RoleReviewer:
-		_ = r.bus.Publish(ctx, &event.ReviewVerdictEvent{
+		return r.bus.Publish(ctx, &event.ReviewVerdictEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Approved: r.verdict,
 		})
 	case RoleTester:
-		_ = r.bus.Publish(ctx, &event.TestReportEvent{
+		return r.bus.Publish(ctx, &event.TestReportEvent{
 			PlanID: task.PlanID, TodoID: task.TodoID, Passed: r.testPass, Output: "ok",
 		})
 	}
@@ -141,8 +144,10 @@ func TestSprint10ExitBarReworkCapEscalates(t *testing.T) {
 		fakePlanner{plan: plan, mode: Multi}, bus, bus, runner)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if err := o.Run(ctx, plan.Goal); err != nil {
-		t.Fatalf("orchestrator Run: %v", err)
+	// The run terminates (the exit bar) but it did NOT succeed: Run reports
+	// ErrPlanFailed so the caller can tell "gave up" from "done".
+	if err := o.Run(ctx, plan.Goal); !errors.Is(err, ErrPlanFailed) {
+		t.Fatalf("orchestrator Run = %v, want ErrPlanFailed", err)
 	}
 	_ = bus.Close()
 
