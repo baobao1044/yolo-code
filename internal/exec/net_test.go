@@ -40,7 +40,10 @@ func (t *netTool) Run(_ context.Context, _ ToolInput) (ToolOutput, error) {
 func newNetEngine(t *testing.T, hosts map[string]bool, tools ...Tool) (*Engine, *netTool) {
 	t.Helper()
 	root := t.TempDir()
-	s := &Sandbox{root: root, cwd: root, hosts: hosts}
+	// NewSandbox for root/cwd (see sandbox_test.go), then the allowlist, which
+	// the constructor does not take.
+	s := NewSandbox(root, root)
+	s.hosts = hosts
 	nt := &netTool{name: "fetch", host: "evil.example:443"}
 	r := new(Registry)
 	for _, tl := range tools {
@@ -74,7 +77,8 @@ func TestNetworkDeniedByDefault(t *testing.T) {
 func TestNetworkAllowedWithOptIn(t *testing.T) {
 	// Allowlist the host → the Net tool runs and connects.
 	root := t.TempDir()
-	s := &Sandbox{root: root, cwd: root, hosts: map[string]bool{"proxy.example.com:443": true}}
+	s := NewSandbox(root, root) // see the note on newSandbox in sandbox_test.go
+	s.hosts = map[string]bool{"proxy.example.com:443": true}
 	nt := &netTool{name: "fetch", host: "proxy.example.com:443"}
 	r := new(Registry)
 	r.Register(nt)
@@ -116,7 +120,7 @@ func TestNonNetToolNotGated(t *testing.T) {
 	// gate — it runs regardless of the allowlist (a Bash tool's network is
 	// gated at the command-class layer, L7-004).
 	root := t.TempDir()
-	s := &Sandbox{root: root, cwd: root} // no allowlist
+	s := NewSandbox(root, root) // no allowlist
 	echo := NewEcho()
 	r := new(Registry)
 	r.Register(echo)

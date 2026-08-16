@@ -27,7 +27,11 @@ import (
 func newBash(t *testing.T) *Bash {
 	t.Helper()
 	root := t.TempDir()
-	return NewBash(&Sandbox{root: root, cwd: root})
+	// NewSandbox, not a literal — see the note on newSandbox in sandbox_test.go.
+	// Bash resolves the paths it reports as changed, so an unnormalized root
+	// makes those resolutions fail on any host where the tempdir sits under a
+	// symlink.
+	return NewBash(NewSandbox(root, root))
 }
 
 func TestBashAllowlistedCommandRuns(t *testing.T) {
