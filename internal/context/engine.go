@@ -35,6 +35,14 @@ type Deps struct {
 	Graph  Graph
 	Diags  Diagnostics
 
+	// Tools are the tool names the model is actually offered, in the order the
+	// system prompt should list them. Injected by the composition root, which
+	// is the only place that knows both this layer and the Cognitive Core:
+	// passing cognitive.DefaultTools() here makes the offered set, the provider's
+	// tool schemas, the Core's allowlist, and this prose list one list. Empty →
+	// defaultToolOrder, the standalone fallback. See toolBlock.
+	Tools []string
+
 	// SoftBudget is the byte budget compression pass 3 keeps under (File 06
 	// §6.3). Zero → a generous default; tests set it small to force trimming.
 	SoftBudget int
@@ -52,6 +60,7 @@ type Engine struct {
 	git        GitDiff
 	graph      Graph
 	diags      Diagnostics
+	tools      []string
 	softBudget int
 	window     int
 }
@@ -61,6 +70,7 @@ func New(d Deps) *Engine {
 	e := &Engine{
 		bus: d.Bus, repo: d.Repo, open: d.Open,
 		memory: d.Memory, git: d.Git, graph: d.Graph, diags: d.Diags,
+		tools:      d.Tools,
 		softBudget: d.SoftBudget, window: d.Window,
 	}
 	if e.softBudget <= 0 {
@@ -117,12 +127,7 @@ RULES:
 - For general questions (non-coding): answer directly using your knowledge, or use bash to run commands (e.g. curl for web queries).
 - Be concise. No filler. No "Sure, I'll help with that." Just answer.
 
-AVAILABLE TOOLS:
-- list_files: list files in the repo. Args: {}
-- read_file: read a file's contents. Args: {"file": "<path>"}
-- edit_file: edit a file. Args: {"file": "<path>", "content": "<full new file content>"}
-- bash: run a shell command. Args: {"command": "<cmd>"}
-- grep: search file contents. Args: {"pattern": "<regex>", "path": "<dir or file>"}
+` + e.toolBlock() + `
 
 TOOL CALL FORMAT:
 To call a tool, emit a fenced code block with the "tool" language tag:
@@ -174,6 +179,58 @@ Always output the FULL file content when using edit_file — never partial diffs
 	markExplicit(parts, req.Task.Goal)
 
 	return parts
+}
+
+// toolProse is the one-line prose description the system prompt shows for each
+// tool. It is prose, so it lives with the prompt; *which* tools appear does not,
+// and that is the half that used to drift. The structured schemas are
+// cognitive.toolDefs, which also feeds cognitive.DefaultTools(), which feeds
+// both the provider request and the Core's default-deny allowlist. Layer 4 may
+// not import Layer 6 (the §15.13 import ceiling — layers reach downward plus the
+// event bus, and doc.go pins this package at "event, memory"), so the offered
+// set arrives the other way: the composition root injects it as Deps.Tools.
+//
+// The result is that this table no longer decides anything. A tool added or
+// removed in cognitive changes this list without anyone touching this file, and
+// a name offered with no prose here renders visibly rather than silently going
+// missing. The names below are only the standalone fallback for an Engine
+// constructed without Deps.Tools (tests, and any caller with no Cognitive Core
+// to ask).
+var toolProse = map[string]string{
+	"list_files": "list files in the repo. Args: {}",
+	"read_file":  `read a file's contents. Args: {"file": "<path>"}`,
+	"edit_file":  `edit a file. Args: {"file": "<path>", "content": "<full new file content>"}`,
+	"bash":       `run a shell command. Args: {"command": "<cmd>"}`,
+	"grep":       `search file contents. Args: {"pattern": "<regex>", "path": "<dir or file>"}`,
+}
+
+// defaultToolOrder is the fallback list, in the order the prompt reads best
+// (discover, read, write, run, search).
+var defaultToolOrder = []string{"list_files", "read_file", "edit_file", "bash", "grep"}
+
+// toolBlock renders the system prompt's AVAILABLE TOOLS section from the
+// injected tool set, falling back to defaultToolOrder when none was injected.
+// An offered tool with no prose is still listed: the model needs to know it
+// exists, and an undescribed entry is a visible prompt for someone to write the
+// line, which a silent omission is not.
+func (e *Engine) toolBlock() string {
+	names := e.tools
+	if len(names) == 0 {
+		names = defaultToolOrder
+	}
+	var b strings.Builder
+	b.WriteString("AVAILABLE TOOLS:")
+	for _, n := range names {
+		b.WriteString("\n- ")
+		b.WriteString(n)
+		b.WriteString(": ")
+		if prose, ok := toolProse[n]; ok {
+			b.WriteString(prose)
+		} else {
+			b.WriteString("(no description available)")
+		}
+	}
+	return b.String()
 }
 
 // gatherFiles reads each open file from disk into a Part. Missing files are

@@ -15,6 +15,8 @@
 package prompt
 
 import (
+	"context"
+
 	econtext "github.com/baobao1044/yolo-code/internal/context"
 	"github.com/baobao1044/yolo-code/internal/event"
 )
@@ -41,12 +43,29 @@ type Counter interface {
 type Compiler struct {
 	counter Counter
 	trimmer *Trimmer
-	bus     *event.Bus
+
+	// bus carries the §6.6.3 TokenBudgetEvent Compile publishes after budgeting.
+	// Nil is supported and means "don't publish" — every applyBudget test builds
+	// a Compiler without one.
+	//
+	// This field was dead for a long time, and the shape of what that cost is
+	// worth keeping: with no event, metric or log recording prompt size or
+	// trimming decisions, two budget defects (the Preferences group being
+	// emitted but never counted, and allocate()'s reserve floor zeroing every
+	// group cap on small windows) ran unnoticed until an audit read the
+	// arithmetic. A model that received none of its retrieved context looked,
+	// from every observable surface, exactly like one that received all of it.
+	//
+	// Animating it needed three things outside this package, all now in place:
+	// the event declared in internal/event/events.go, registered in catalog.go
+	// (an unregistered topic makes any durability log containing it unreplayable
+	// — see codec.go UnmarshalJSON), and cmd/yolo's golden headless transcript
+	// regenerated, since it hashes every envelope on the root wildcard.
+	bus *event.Bus
 }
 
 // New constructs a Compiler. counter defaults to a whitespace heuristic when
-// nil; bus is optional (the compiler publishes TokenBudgetEvent per group,
-// File 06 §6.6.3, when present).
+// nil; a nil bus disables TokenBudgetEvent publication.
 func New(c Counter, bus *event.Bus) *Compiler {
 	comp := &Compiler{counter: c, bus: bus}
 	if comp.counter == nil {
@@ -59,10 +78,31 @@ func New(c Counter, bus *event.Bus) *Compiler {
 // Compile runs the deterministic pipeline (File 06 §6.5): dedup → summarize →
 // applyBudget → order. The result is the ordered, budgeted wire prompt.
 func (c *Compiler) Compile(pkg econtext.ContextPackage) []Message {
+	// Read before the stages run: dedup/summarize/applyBudget each return a
+	// rebuilt package, and the causal id is the one field the report needs from
+	// the input rather than the output.
+	task := event.TaskID(pkg.Task)
 	pkg = c.dedup(pkg)
 	pkg = c.summarize(pkg)
-	pkg = c.applyBudget(pkg)
+	pkg, rep := c.applyBudget(pkg)
+	c.publishBudget(task, rep)
 	return c.order(pkg)
+}
+
+// publishBudget emits the §6.6.3 TokenBudgetEvent. Best-effort and nil-bus-safe,
+// with context.Background() because Compile is a pure synchronous stage with no
+// context of its own — the same arrangement scope.Controller.Enter uses for
+// scope.enter, and for the same reason.
+func (c *Compiler) publishBudget(task event.TaskID, rep budgetReport) {
+	if c.bus == nil {
+		return
+	}
+	_ = c.bus.Publish(context.Background(), &event.TokenBudgetEvent{
+		Task:    task,
+		Window:  rep.window,
+		Used:    rep.used,
+		Dropped: rep.dropped,
+	})
 }
 
 // whitespaceCounter is the Sprint 2 default Counter: tokens ≈ whitespace-split

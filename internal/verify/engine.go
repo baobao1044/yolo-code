@@ -104,9 +104,18 @@ type Engine struct {
 	bus      *event.Bus
 }
 
-// NewEngine wires an Engine from Deps.
+// NewEngine wires an Engine from Deps, including the L8-005 unchanged-file
+// cache. The cache is created here rather than taken from Deps because the
+// Engine is the production entry point and the cache is a correctness-neutral
+// perf feature (content-hash keyed, only a prior PASS is re-used) — there is
+// no caller who wants it off. NewPipeline keeps its explicit Cache field for
+// tests that need a cacheless pipeline. Before this, PipelineDeps.Cache was
+// never set on any real path, so L8-005 was live only in its own tests.
 func NewEngine(d Deps) *Engine {
-	return &Engine{pipeline: NewPipeline(PipelineDeps{Runner: d.Runner, FS: d.FS}), bus: d.Bus}
+	return &Engine{
+		pipeline: NewPipeline(PipelineDeps{Runner: d.Runner, FS: d.FS, Cache: NewFileCache()}),
+		bus:      d.Bus,
+	}
 }
 
 // Verify runs the required stages for the Change under the Policy and returns
@@ -116,6 +125,16 @@ func NewEngine(d Deps) *Engine {
 // `verification.failed` naming the failing stage. A warning does NOT fail
 // (§9.4.1) and does NOT publish verification.failed — the warning is recorded
 // on the Verdict for the model to fix in a follow-up.
+//
+// A stage that produced no signal has not passed. If every required stage came
+// back a plain SevSkip — nothing parsed, no tool invoked, no rule evaluated —
+// the run measured nothing and the Verdict is a fail, not a pass. In practice
+// this fires for a Change with no Files: the AST stage had nothing to parse,
+// the five command stages had nothing to hand a tool, and the Policy stage had
+// no file to check a rule against, so the old code fell through to Pass=true
+// having executed zero commands. Legitimate skips still certify because
+// something else in the run measured: a Markdown-only patch skips all five
+// command stages but AST and Policy still run over the .md file.
 func (e *Engine) Verify(ctx context.Context, ch Change, pol Policy) Verdict {
 	v := Verdict{Severity: SevPass}
 	wanted := pol.Required()
@@ -125,15 +144,20 @@ func (e *Engine) Verify(ctx context.Context, ch Change, pol Policy) Verdict {
 	}
 
 	// Walk the pipeline's 7 stages in canonical order; run the ones the
-	// policy requires, skip the rest. A fail short-circuits.
+	// policy requires, skip the rest. A fail short-circuits. signals counts the
+	// required stages that actually measured something.
+	signals := 0
 	for _, st := range e.pipeline.stages {
 		if !required[st.Name()] {
 			skip := StageResult{Stage: st.Name(), Status: SevSkip, Detail: "not required by policy"}
 			e.publishStage(ctx, ch.Task, skip)
 			continue
 		}
-		r := st.Run(ctx, ch.Files)
+		r := st.Run(ctx, ch.Files, pol)
 		e.publishStage(ctx, ch.Task, r)
+		if r.Status != SevSkip || r.Cached {
+			signals++ // a cache hit re-uses a real measurement (L8-005).
+		}
 		switch r.Status {
 		case SevFail:
 			// First failure decides the Verdict and stops the chain.
@@ -151,7 +175,37 @@ func (e *Engine) Verify(ctx context.Context, ch Change, pol Policy) Verdict {
 			}
 		}
 	}
+	if signals == 0 {
+		return e.noSignalVerdict(ctx, ch, wanted)
+	}
 	v.Pass = true
+	return v
+}
+
+// noSignalVerdict is the Verdict for a run in which every required stage
+// skipped without measuring anything. It fails rather than erroring so the
+// runtime's existing fail path (rollback → Reflection, File 04 §4.5 T12/T13)
+// handles it — and so Engine.Verify keeps its signature. The reason names the
+// file count because that is almost always the cause: an Observation that
+// carried no paths (a bash tool result, or a patch whose touched files were
+// never threaded through) reaching VERIFY.
+func (e *Engine) noSignalVerdict(ctx context.Context, ch Change, wanted []Stage) Verdict {
+	stage := StagePolicy // Required() always ends with the project gate.
+	if len(wanted) > 0 {
+		stage = wanted[0]
+	}
+	reason := fmt.Sprintf(
+		"no verification signal: every required stage was skipped (the change lists %d files)",
+		len(ch.Files),
+	)
+	v := Verdict{
+		Pass:     false,
+		Stage:    stage,
+		Severity: SevFail,
+		Reason:   reason,
+		Errors:   []Issue{{Code: "no-signal", Message: reason}},
+	}
+	e.publishFailed(ctx, ch.Task, reason)
 	return v
 }
 

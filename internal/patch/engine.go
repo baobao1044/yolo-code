@@ -188,15 +188,18 @@ func (e *Engine) Apply(ctx context.Context, op Op) (Result, error) {
 	// survivable, a rolled-back success would corrupt the tree.
 	res.Accepted = true
 	res.Summary = Summarize([]Change{{Path: op.Path, Original: original, Next: next}})
-	diff := UnifiedDiff(original, next)
 	if e.bus != nil {
+		// UnifiedDiff is the expensive half of the accept path (an LCS over the
+		// changed region). It exists only to fill Diff, so it is computed inside
+		// this branch: with no bus wired — every unit test, every embedding that
+		// doesn't want a transcript — the string was built and thrown away.
 		_ = e.bus.Publish(ctx, &event.PatchAppliedEvent{
 			Task:       event.TaskID(op.Task),
 			Snapshot:   []byte(fmt.Sprintf("%q", string(snap))),
 			Files:      toEventFiles(res.Summary.Files),
 			Insertions: res.Summary.Insertions,
 			Deletions:  res.Summary.Deletions,
-			Diff:       diff,
+			Diff:       UnifiedDiff(original, next),
 		})
 	}
 	return res, nil

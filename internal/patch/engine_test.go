@@ -10,6 +10,7 @@ package patch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -228,5 +229,42 @@ func TestEngineAcceptedCarriesCheckpointForRuntimeRestore(t *testing.T) {
 	}
 	if res.Snapshot == "" {
 		t.Error("Snapshot is empty, want an opaque ref for the user/event")
+	}
+}
+
+// TestApplyWithoutBusDoesNotRenderTheDiff pins fix (a) of the diff-cost pass:
+// PatchAppliedEvent.Diff is the only consumer of UnifiedDiff, so with no bus
+// wired the render is pure waste — it used to run anyway and throw the string
+// away. The probe is a 1 000-line full rewrite, whose changed region is under
+// the maxDiffCells cap and therefore genuinely expensive to render (~1.2 MiB,
+// ~6 ms measured); the accept path without a bus must stay well under that.
+func TestApplyWithoutBusDoesNotRenderTheDiff(t *testing.T) {
+	const n = 1000
+	var orig, next strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&orig, "old %d aaaa\n", i)
+		fmt.Fprintf(&next, "new %d bbbb\n", i)
+	}
+
+	apply := func() {
+		fs := &memFS{files: map[string]string{"a.txt": orig.String()}}
+		e := NewEngine(Deps{FS: fs, Checkpoint: &memCheckpointer{}, Bus: nil})
+		res, err := e.Apply(context.Background(), Op{
+			Task: "t_diff", Seq: 1, Path: "a.txt", FullContent: next.String(),
+		})
+		if err != nil || !res.Accepted {
+			t.Fatalf("Apply = %+v, %v; want accepted", res, err)
+		}
+	}
+
+	used := allocBytes(apply, 3)
+
+	// Rendering the diff costs ~1.2 MiB on its own with the current renderer and
+	// ~8.5 MiB with the pre-fix full table. Everything else on the accept path
+	// (read, Summarize's rolling-row LCS, the write) is tens of KiB.
+	const budget = 512 << 10
+	if used > budget {
+		t.Errorf("Apply with a nil bus allocated %d bytes, want <= %d "+
+			"(the discarded UnifiedDiff render is the difference)", used, budget)
 	}
 }

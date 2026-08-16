@@ -4,6 +4,7 @@ import (
 	stdctx "context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +272,89 @@ func TestBuildGathersRAGFromMemoryRetrieve(t *testing.T) {
 	}
 }
 
+// TestBuildRetainsRetrievedChunkUnderATightBudget is the end-to-end guard on
+// the whole gather → rank → compress path: the user asks to fix a function, the
+// store retrieves the chunk holding it, and two files the user happens to have
+// open — unrelated directory, not one token in common with the goal — must not
+// evict it.
+//
+// Both halves of the path used to break it. rank gave every file part a
+// constant 0.25 of proximity (0.294 after a renormalisation that has also
+// gone), because a goal naming no file made each part its own reference point;
+// that floor put both noise files above any realistic cosine. compress then
+// walked one globally ordered list against one shared byte budget, so the two
+// files consumed all 900 bytes and the RAG group came out empty — and an empty
+// group is invisible downstream, so nothing reported the loss.
+//
+// The cosine here is measured, not invented: 0.1529 is what the default hashing
+// embedder (internal/memory/embed.go) actually returns for this goal against
+// this Login body. Note the noise files still score 0.30 apiece on recency
+// alone — a freshly written file is genuinely recent — so this asserts the
+// chunk *survives*, which is the harm. Ordering against a bare recency score is
+// pinned separately in TestRankProximityAbstainsWhenTheGoalNamesNoFile.
+func TestBuildRetainsRetrievedChunkUnderATightBudget(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"auth/login.go":     "package auth\n\nfunc Login(user, pass string) error { return nil }\n",
+		"docs/CHANGELOG.md": strings.Repeat("z", 400),
+		"docs/NOTES.md":     strings.Repeat("z", 400),
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	rag := []Part{
+		{Kind: KindRAG, Source: "auth/login.go#1", Score: 0.1529,
+			Text: "func Login(user, pass string) error {\n\tif pass == \"\" {\n\t\treturn errors.New(\"bad password\")\n\t}\n\treturn nil\n}"},
+		{Kind: KindRAG, Source: "auth/session.go#1", Score: 0,
+			Text: "func NewSession(user string) *Session { return &Session{User: user} }"},
+	}
+	eng := New(Deps{
+		Bus: bus, Repo: root, Memory: fakeMemory{rag: rag},
+		Open:       []string{"docs/CHANGELOG.md", "docs/NOTES.md"},
+		SoftBudget: 900,
+	})
+	req := ContextRequest{Task: &session.Task{
+		ID: "t1", Goal: "fix the Login function so bad passwords are rejected",
+	}}
+
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	kept := false
+	for _, p := range pkg.RAG {
+		if p.Source == "auth/login.go#1" {
+			kept = true
+		}
+	}
+	if !kept {
+		got := make([]string, 0, len(pkg.Files)+len(pkg.RAG))
+		for _, p := range pkg.Files {
+			got = append(got, "file "+p.Source)
+		}
+		for _, p := range pkg.RAG {
+			got = append(got, "rag "+p.Source)
+		}
+		t.Errorf("auth/login.go#1 evicted; package kept %v. The retrieved chunk holding "+
+			"the function under repair must survive two unrelated open files", got)
+	}
+	// The eviction has to land somewhere: with 900 bytes, keeping the chunk
+	// means one of the two 400-byte noise files goes.
+	if len(pkg.Files) == 2 {
+		t.Errorf("both noise files kept (%d bytes of budget 900) — the budget was not "+
+			"actually tight, so this test proves nothing", 800)
+	}
+}
+
 // TestBuildRAGEmptyWhenMemoryReturnsNone: a noop memory seam leaves pkg.RAG
 // empty (the default path before L10-006 wires a real store).
 func TestBuildRAGEmptyWhenMemoryReturnsNone(t *testing.T) {
@@ -283,5 +367,109 @@ func TestBuildRAGEmptyWhenMemoryReturnsNone(t *testing.T) {
 	}
 	if len(pkg.RAG) != 0 {
 		t.Errorf("pkg.RAG = %d parts, want 0 (noop memory)", len(pkg.RAG))
+	}
+}
+
+// TestBuildKeepsTheSystemFrameAtARealisticBudget is the end-to-end half of the
+// compress-level guard: the same fixture as
+// TestBuildRetainsRetrievedChunkUnderATightBudget, which measured pkg.System at
+// 0 parts. The retrieved chunk surviving is worth nothing if the prompt it
+// survives into has no rules, no tool list, and no role.
+func TestBuildKeepsTheSystemFrameAtARealisticBudget(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"docs/CHANGELOG.md": strings.Repeat("z", 400),
+		"docs/NOTES.md":     strings.Repeat("z", 400),
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	rag := []Part{{Kind: KindRAG, Source: "auth/login.go#1", Score: 0.1529,
+		Text: "func Login(user, pass string) error { return nil }"}}
+	eng := New(Deps{
+		Bus: bus, Repo: root, Memory: fakeMemory{rag: rag},
+		Open:       []string{"docs/CHANGELOG.md", "docs/NOTES.md"},
+		SoftBudget: 900,
+	})
+	req := ContextRequest{Task: &session.Task{
+		ID: "t1", Goal: "fix the Login function so bad passwords are rejected",
+	}}
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(pkg.System) != 1 {
+		t.Fatalf("pkg.System = %d parts at SoftBudget 900, want 1: the 1505-byte frame is "+
+			"not gathered repository state and is not the thing to evict", len(pkg.System))
+	}
+	if !contains(pkg.System[0].Text, "AVAILABLE TOOLS") {
+		t.Error("the surviving system part is not the frame")
+	}
+	// And the exemption must not have starved what the budget is actually for.
+	if len(pkg.Files) == 0 && len(pkg.RAG) == 0 {
+		t.Error("every gathered group empty: the frame is exempt from the budget, " +
+			"not entitled to spend it")
+	}
+}
+
+// TestSystemPromptToolListFollowsTheInjectedToolSet pins the one direction that
+// matters for the fourth copy of the tool list: when the composition root
+// injects the offered set (cognitive.DefaultTools(), which is also what produces
+// the provider's schemas and the Core's allowlist), the prompt lists that set
+// and nothing else. A tool removed upstream disappears here without anyone
+// editing this package, and a tool added upstream appears — visibly undescribed
+// if nobody has written its line, which is the point: silence is what the old
+// hand-typed list gave.
+func TestSystemPromptToolListFollowsTheInjectedToolSet(t *testing.T) {
+	repo := fixtureRepo(t)
+	bus := event.New()
+	t.Cleanup(func() { _ = bus.Close() })
+	eng := New(Deps{Bus: bus, Repo: repo, Tools: []string{"read_file", "web_fetch"}})
+	req, _ := newReq(repo, "goal")
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	text := pkg.System[0].Text
+	if !contains(text, "- read_file: read a file's contents") {
+		t.Error("an offered tool with prose must be listed with it")
+	}
+	if !contains(text, "- web_fetch: (no description available)") {
+		t.Error("an offered tool with no prose must still be listed, visibly undescribed — " +
+			"the model can call it, so the prompt may not pretend it does not exist")
+	}
+	// Assert on the list form specifically. The CODING STRATEGY paragraph below
+	// the list names read_file/grep/edit_file as prose advice about a workflow;
+	// that is writing, not a registry, and it is not what drifts.
+	for _, gone := range []string{"edit_file", "list_files", "bash"} {
+		if contains(text, "- "+gone+": ") {
+			t.Errorf("prompt lists %q, which was not offered: the injected set is the "+
+				"source of truth for which tools appear", gone)
+		}
+	}
+}
+
+// TestSystemPromptFallsBackToTheLocalToolListWhenNoneIsInjected: an Engine built
+// without Deps.Tools (tests, and any caller with no Cognitive Core to ask) keeps
+// the standalone list, so this package still builds a usable prompt alone.
+func TestSystemPromptFallsBackToTheLocalToolListWhenNoneIsInjected(t *testing.T) {
+	repo := fixtureRepo(t)
+	eng := newEngine(t, repo, nil)
+	req, _ := newReq(repo, "goal")
+	pkg, err := eng.Build(stdctx.Background(), req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, want := range []string{"list_files", "read_file", "edit_file", "bash", "grep"} {
+		if !contains(pkg.System[0].Text, "- "+want+": ") {
+			t.Errorf("fallback tool list missing %q", want)
+		}
 	}
 }

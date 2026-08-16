@@ -67,11 +67,21 @@ type ContextRequest struct {
 // Budget is the token budget allocated across the prompt groups (File 06
 // §6.6.1). The Context Engine computes the window; the Prompt Compiler
 // enforces it. Populated by Build so the compiler can trim.
+//
+// Preferences is not in §6.6.1's table, which predates the group: the recalled
+// preferences ContextPackage.Preferences carries are emitted under their own
+// <preferences> section and shipped to the model, so they cost tokens and need
+// a cap. Without the field the Prompt Compiler capped them with Project, which
+// works only because both are persistent guidance ordered together in the
+// system block — a coincidence, not a contract, and the group is unbounded and
+// accumulating (the memory adapter returns every stored preference with no
+// top-K), so the cap it borrows has to be one somebody chose.
 type Budget struct {
 	Window       int
 	Reserve      int
 	System       int
 	Project      int
+	Preferences  int
 	Conversation int
 	Files        int
 	RAG          int
