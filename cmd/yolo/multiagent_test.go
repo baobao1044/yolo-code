@@ -17,6 +17,14 @@ import (
 )
 
 func TestMultiAgentEndToEndPatchReviewTestMerge(t *testing.T) {
+	// The patch tool is a high-risk write and now parks on the HITL gate like
+	// any other. This test drives the runner directly, so neither of the two
+	// things that answer that prompt in production (the TUI human, the plan
+	// runner's refuse-on-stall watcher) is present and the run would stall.
+	// Opt the class out — the subject here is coder → reviewer → tester →
+	// merge, not the gate.
+	t.Setenv("YOLO_AUTO_APPROVE_HIGH", "true")
+
 	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module testrepo\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -37,8 +45,11 @@ func TestMultiAgentEndToEndPatchReviewTestMerge(t *testing.T) {
 	patchBody := "package app\n\nfunc Hello() string { return \"hi\" }\n"
 
 	runner := newRuntimeAgentRunner(repo, nil, bus).
-		withCost(costPub).
 		withPatches(map[string]string{todoID: patchBody})
+	// The runner allocates a shadow tree on its first buildAdapters and has no
+	// teardown of its own. Cleanup-time, not inline: the patch engine below
+	// checkpoints into the tree and reads it back during the run.
+	t.Cleanup(func() { _ = runner.close() })
 
 	o := coord.NewOrchestrator(
 		coord.Config{MaxReworkCycles: 1, Concurrency: 1},
@@ -68,7 +79,7 @@ func TestMultiAgentEndToEndPatchReviewTestMerge(t *testing.T) {
 				review = true
 			case "coord.test.report":
 				testReport = true
-			case "plan.done":
+			case "coord.plan.done":
 				planDone = true
 			case "cost.incurred":
 				costIncurred = true

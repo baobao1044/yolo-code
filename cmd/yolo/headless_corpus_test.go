@@ -117,6 +117,9 @@ func buildCorpusPackage(t *testing.T, eng *econtext.Engine, goal string) *econte
 	if err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	// Cleanup-time rather than defer: the session store is read back through
+	// smgr.Resume / LoadTaskPublic further down.
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	bus := event.New()
 	smgr := session.New(session.Deps{
 		Store: session.NewFileStore(dir), Bus: bus, Git: session.NewInMemCheckpointer(),

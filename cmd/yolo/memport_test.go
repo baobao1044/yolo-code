@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,12 +89,66 @@ func TestRecalledPreferenceSurfacesInPrompt(t *testing.T) {
 	}
 }
 
-// TestMemoryStoreAdapterPublishesNotMutates: the runtime.MemoryStore adapter
-// (Update) must publish an event the listener reacts to — it must NOT mutate a
-// sub-store directly (§11.2). Calling Update with no prior conversation should
-// not append a spurious message; the event-driven path is the only writer. This
-// asserts the adapter is a publisher, not a direct mutator.
-func TestMemoryStoreAdapterPublishesNotMutates(t *testing.T) {
+// TestMemoryPortDoesNotDuplicateTaskCompleted: wiring the runtime's MemoryStore
+// port must not add a second task.completed to the run.
+//
+// The adapter used to implement "record what this task learned" by publishing a
+// task.completed of its own, to make the memory listener persist. But look at
+// where the runtime calls it (internal/runtime/core.go, direct-answer arm):
+//
+//	if c.memory != nil {
+//	    _ = c.memory.Update(ctx, h.id)   // adapter publishes task.completed
+//	}
+//	_ = c.session.CompleteTask(ctx, h.id) // manager.go:236 publishes task.completed
+//
+// Two lines apart, the same event twice. Every consumer sees it: the TUI folds a
+// second completion, the durability log records one that never happened, infra's
+// observers count two tasks for one. Worse, the listener's task.completed arm
+// launches its persist on a goroutine, so two of them run concurrently and write
+// conversations/<id>.json and exec/<id>.json at the same time.
+//
+// The port itself is not the problem — the fabricated event is. Memory persists
+// this task either way, off the genuine task.completed the session manager
+// publishes, which is exactly why the duplicate bought nothing.
+func TestMemoryPortDoesNotDuplicateTaskCompleted(t *testing.T) {
+	dir := t.TempDir()
+	bus := event.New()
+	mem, err := memory.Open(memory.Deps{Root: dir, Bus: bus})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		_ = bus.Close()
+		_ = mem.Close()
+	}()
+
+	out, err := runHeadlessDeps(context.Background(), bytes.NewBufferString("say hi\n"), 0,
+		&headlessDeps{memory: mem, bus: bus})
+	if err != nil {
+		t.Fatalf("runHeadlessDeps: %v", err)
+	}
+
+	got := strings.Count(out, `"type":"task.completed"`)
+	if got != 1 {
+		t.Errorf("transcript carries %d task.completed events, want exactly 1 — "+
+			"the memory port fabricated a lifecycle event the runtime publishes for real\n%s",
+			got, out)
+	}
+}
+
+// TestMemoryStoreAdapterNeitherPublishesNorMutates pins both halves of the
+// adapter's contract (§11.2 and the duplicate above).
+//
+// The original test asserted only the first half — the adapter must not write a
+// sub-store directly, because the listener is memory's only writer — and it
+// checked that by looking for the memory.update the listener emits when it
+// reacts. That made "the adapter published something the listener consumed" the
+// pass condition, so the fabricated task.completed read as the feature working.
+//
+// So assert the other half too, and assert it on the bus rather than through the
+// listener: Update is a seam with no work at its call site, and a seam with no
+// work publishes nothing. A root subscriber sees anything it did emit.
+func TestMemoryStoreAdapterNeitherPublishesNorMutates(t *testing.T) {
 	dir := t.TempDir()
 	bus := event.New()
 	mem, err := memory.Open(memory.Deps{Root: dir, Bus: bus})
@@ -108,35 +163,25 @@ func TestMemoryStoreAdapterPublishesNotMutates(t *testing.T) {
 		_ = mem.Close()
 	}()
 
-	// Subscribe to memory.update so we can assert the adapter's Update
-	// produced a learning event (the listener reacted).
-	ch := bus.Subscribe(event.Topic("memory.update"))
+	ch := bus.Subscribe(event.Topic(">"))
 	adapter := memoryStoreAdapter{store: mem, bus: bus}
 
-	// The runtime calls Update(ctx, taskID) on the direct-answer path. The
-	// adapter's job is to trigger a memory learning — it publishes an event the
-	// listener reacts to. A direct mutation would bypass the listener.
 	if err := adapter.Update(context.Background(), "t_recall"); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	// Drain a short window; the listener should have reacted (published at least
-	// one memory.update from the dispatch, OR the adapter's own publish).
-	saw := false
-	for {
-		select {
-		case env, ok := <-ch:
-			if !ok {
-				return
-			}
-			if env.Evt.Type() == "memory.update" {
-				saw = true
-			}
-		case <-time.After(150 * time.Millisecond):
-			if !saw {
-				t.Error("memoryStoreAdapter.Update produced no memory.update event (the adapter didn't trigger a learning)")
-			}
-			return
-		}
+	select {
+	case env := <-ch:
+		t.Errorf("Update published %q; the runtime publishes this task's completion "+
+			"through the session manager one line later, so anything the adapter "+
+			"emits here is a duplicate", env.Evt.Type())
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// The other half, unchanged in substance: no direct sub-store write. A
+	// spurious conversation entry is what a direct mutation would leave behind.
+	if msgs := mem.Conversation().Messages("t_recall"); len(msgs) != 0 {
+		t.Errorf("Update wrote %d conversation entries directly; the listener is "+
+			"memory's only writer (§11.2)", len(msgs))
 	}
 }

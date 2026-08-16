@@ -26,12 +26,43 @@ type shadowSnap struct {
 }
 
 // newShadowSnap creates a shadow snapshot store under a temporary directory.
+// The caller owns close.
 func newShadowSnap(root string) (*shadowSnap, error) {
 	dir, err := os.MkdirTemp("", "yolo-shadow-*")
 	if err != nil {
 		return nil, fmt.Errorf("shadow checkpointer: %w", err)
 	}
 	return &shadowSnap{root: root, dir: dir}, nil
+}
+
+// close removes the shadow tree. Nothing removed it before and the composition
+// root builds one per headless run, per TUI session and per coord todo: 1703
+// yolo-shadow-* dirs on one dev box, each holding a copy of the files some
+// patch was about to overwrite.
+//
+// Deleting is safe because the snapshots are in-process rollback state with no
+// reader outside the run that wrote them: restore recomputes its path from
+// s.dir, which is a fresh os.MkdirTemp on every construction, and nothing
+// rebuilds a shadowSnap around an existing directory — so no later process can
+// reach a tree this one leaves behind. The SnapshotRef checkpoint hands back
+// does travel out through runtime.PatchResult, but its only consumer is
+// runtime.filesFromSnapshot, which discards it; the ref persisted in a session
+// history record comes from session.InMemCheckpointer, not from here. A hard
+// crash still leaves the tree on disk for forensics — a deferred close does not
+// run on SIGKILL — so the copies survive exactly the case that could want them.
+//
+// Rooting the tree somewhere durable instead (the sessionStateDir fix applied
+// to the session and memory stores) would be a bug here: checkpoints are keyed
+// task/name and task ids restart at t_1 for every run, so on a shared root one
+// run's rollback would restore another run's file contents.
+//
+// Call it once, after every Checkpointer and Restorer built from this snap is
+// done — a patch that rolls back reads the tree back mid-run.
+func (s *shadowSnap) close() error {
+	if s == nil {
+		return nil
+	}
+	return os.RemoveAll(s.dir)
 }
 
 // checkpoint copies the listed paths from the repo root into the shadow tree
@@ -100,22 +131,67 @@ func (s *shadowSnap) restore(ctx context.Context, task, name string) error {
 	})
 }
 
-// copyFile copies src to dst using a temporary file and atomic rename.
+// copyFile copies src to dst through a temporary file in dst's own directory
+// and an atomic rename, carrying the source's permission bits across.
+//
+// It said it did this and did not. It called os.Create(dst) — which truncates
+// before a single byte has been read — and streamed into the live file. Two
+// things followed, and both land on the restore direction, where dst is a file
+// in the user's repository:
+//
+//   - A copy that failed after the truncate left dst empty and returned the
+//     error. The mechanism whose whole purpose is to hand the file back deleted
+//     its contents instead, in exactly the situation it exists for. Writing to a
+//     temp file first means a failure leaves dst untouched: rename is the only
+//     operation that touches it, and it either happens or it does not.
+//   - os.Create picks the mode from the umask. Truncating an EXISTING file keeps
+//     that file's permissions, so a patch that merely edited a script rolled
+//     back fine — which is why this went unnoticed. A patch that DELETED it made
+//     restore re-create the target, and it came back 0644 however it started.
+//     Rolling back a removed hook or shell script handed it back unrunnable and
+//     reported success. Chmod to the source's mode fixes both directions at
+//     once: the shadow copy now carries the mode, so the restore has one to give
+//     back.
+//
+// The temp file is created in filepath.Dir(dst) rather than the system temp dir
+// because rename is only atomic within a filesystem, and a shadow tree under
+// os.MkdirTemp is routinely on a different one from the repo.
+//
+// See shadow_copyfile_test.go, which pins both properties.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+
+	fi, err := in.Stat()
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".tmp*")
+	if err != nil {
 		return err
 	}
-	return out.Close()
+	tmpName := tmp.Name()
+	// Cleanup on every failure path below. After a successful rename the name is
+	// gone and this is a no-op, which is why the error is dropped.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Before the rename, so dst is never observable with the wrong mode.
+	if err := tmp.Chmod(fi.Mode().Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dst)
 }
 
 // shadowCheckpointer adapts shadowSnap to patch.Checkpointer.

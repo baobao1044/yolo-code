@@ -30,7 +30,7 @@ func TestPlanRunnerEmitsTranscript(t *testing.T) {
 		"\"type\":\"coord.code.ready\"",
 		"\"type\":\"coord.review.verdict\"",
 		"\"type\":\"coord.test.report\"",
-		"\"type\":\"plan.done\"",
+		"\"type\":\"coord.plan.done\"",
 		"\"type\":\"cost.incurred\"",
 	}
 	for _, w := range want {
@@ -40,12 +40,40 @@ func TestPlanRunnerEmitsTranscript(t *testing.T) {
 	}
 }
 
+// Shutdown ordering: every tool.result must have its cost.incurred in the
+// transcript. While bus.Close ran before costPub.Stop the trailing accruals
+// lost to ErrBusClosed and vanished — the publisher counts them, but by then
+// there is no subscriber left to be told. Which accrual loses is a race, so
+// this runs the plan several times; one clean run proves nothing.
+func TestPlanRunnerCostAccrualsOutliveTheBus(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		out, err := runPlanCtx(ctx, "add x.txt, add y.txt, add z.txt")
+		cancel()
+		if err != nil {
+			t.Fatalf("run %d: runPlanCtx: %v", i, err)
+		}
+		results := strings.Count(out, `"type":"tool.result"`)
+		costs := strings.Count(out, `"type":"cost.incurred"`)
+		if results == 0 {
+			t.Fatalf("run %d: no tool.result in transcript, so the count below proves nothing", i)
+		}
+		if costs != results {
+			t.Fatalf("run %d: %d tool.result but only %d cost.incurred; accruals were lost to a bus closed before costPub.Stop", i, results, costs)
+		}
+	}
+}
+
 func TestPlanRunnerSingleFallsBack(t *testing.T) {
 	// Not in the runner itself but verifies ShouldOrchestrate routing in main.
 	if coordpkg.ShouldOrchestrate(" explain this function") {
 		t.Fatal("single-clause goal should not orchestrate")
 	}
-	if !coordpkg.ShouldOrchestrate("a, b, c") {
-		t.Fatal("three-clause goal should orchestrate")
+	// Three clauses alone are not three tasks — "a, b, c" is a list of nouns
+	// asking for nothing, and classifying it Multi was exactly the
+	// over-triggering the classifier was fixed to stop. Assert on a goal that
+	// genuinely carries three units of work.
+	if !coordpkg.ShouldOrchestrate("add x.txt, add y.txt, add z.txt") {
+		t.Fatal("three-task goal should orchestrate")
 	}
 }

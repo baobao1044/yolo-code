@@ -171,11 +171,18 @@ func TestL11_007_CoordEventsCanonicalOrder(t *testing.T) {
 }
 
 // TestL11_007_BoardContractMatchesTUI009: the event types the orchestrator
-// publishes are EXACTLY the five topics TUI-009 subscribes to (coord.plan.ready,
-// coord.task.assign, coord.code.ready, coord.review.verdict, coord.test.report).
+// publishes are EXACTLY the six topics TUI-009 subscribes to (coord.plan.ready,
+// coord.task.assign, coord.code.ready, coord.review.verdict, coord.test.report,
+// coord.plan.done).
 // This guards the contract: a new coord.* topic the TUI doesn't fold would be
 // invisible on the board; a topic the TUI folds but the orchestrator never
 // publishes would leave the board stuck.
+//
+// The terminal event was missing from this list for as long as its topic was
+// the bare "plan.done" — the guard reads coord.* names off the bus, so the one
+// event whose name broke the family convention was also the one event this
+// check could not see. Renaming it to coord.plan.done is what surfaced the
+// gap; the TUI has folded PlanDoneEvent all along.
 func TestL11_007_BoardContractMatchesTUI009(t *testing.T) {
 	bus := event.New()
 	runner := &fakeAgentRunner{
@@ -200,6 +207,7 @@ func TestL11_007_BoardContractMatchesTUI009(t *testing.T) {
 		"coord.code.ready":     true,
 		"coord.review.verdict": true,
 		"coord.test.report":    true,
+		"coord.plan.done":      true,
 	}
 	for _, tp := range rec.types {
 		if !tui009Topics[tp] {
