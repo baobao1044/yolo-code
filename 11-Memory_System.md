@@ -32,7 +32,7 @@ The brief divides memory into six kinds, each with a clear purpose:
 | Conversation | per-session | across turns | SQLite | the full message history, resumable |
 | Execution History | per-task | across the task | SQLite + git snapshots | tool calls, observations, patches, retries |
 | Repository Memory | per-project | across sessions | `AGENTS.md` + tree cache + symbol graph | conventions, structure, symbol relationships |
-| Knowledge Memory | per-project, growing | across sessions | vector DB (semantic) | codebase chunks for RAG retrieval |
+| Knowledge Memory | per-project, growing | across sessions | retrieval index (lexical as shipped — §11.6) | codebase chunks for RAG retrieval |
 | Preference Memory | per-user | across projects | SQLite (user profile) | style, tooling, do/don't, model choice |
 
 Each type has a distinct *scope* (turn / session / task / project / user),
@@ -173,8 +173,9 @@ and `Grep`/`Glob` by default: `node_modules/`, `vendor/`, `.git/`, build outputs
 ## 11.5 Knowledge & Preference Memory
 
 ### 11.5.1 Knowledge Memory (semantic / vector)
-The vector store for RAG — retrieve code by meaning, not by grep. Detailed in
-§11.6.
+The retrieval index for RAG — pull the chunks a task is about without the model
+having to ask for each file. Detailed in §11.6; see the as-shipped note there
+for what the default matcher actually compares.
 
 ### 11.5.2 Preference Memory
 Per-user, cross-project: style ("wrap errors with %w"), tooling ("use
@@ -197,6 +198,24 @@ explicit "user asked to remember" event.
 ---
 
 ## 11.6 Semantic Memory (Vector RAG)
+
+> **As shipped (read this before the design below).** This section is the design
+> target. What is built is narrower, and the difference matters:
+>
+> - There is **no embedding model**, hosted or local, and no `--local-embed`
+>   flag. The default `Embedder` is a hashing term-frequency vectorizer
+>   (FNV-1a, dim 384) — lexical overlap, not meaning. A synonym-only paraphrase
+>   scores zero, pinned by `TestDefaultEmbedderIsLexicalNotSemantic`.
+> - There is **no ANN index**. `Retrieve` is a linear scan over every chunk.
+> - There is **no SQLite persistence** — the project is stdlib-only; the store
+>   is in-memory and rebuilt by `IndexRepo` at session open.
+> - The type is named `LexicalStore` (`NewLexicalStore`, `NewLexicalStoreWith`,
+>   `NewLexicalStoreWithFS`) for that reason. The accessor `Store.Semantic()`
+>   keeps this section's name and returns a `*LexicalStore`.
+>
+> The `Embedder` interface is the live substitution seam: injecting a real model
+> via `memory.Deps.Embedder` turns this into semantic retrieval with no other
+> change. See `internal/memory/embed.go` and `docs/rag/vector-store.md`.
 
 ### 11.6.1 Vector DB decision
 
@@ -312,6 +331,11 @@ Voyage, or a local model via Ollama). Configurable; default hosted small model,
 with `--local-embed` for the offline/air-gapped audience (File 01 §1.3.3) so no
 code leaves the machine.
 
+*As shipped:* neither the hosted default nor `--local-embed` exists. The
+interface is real and is the only part of this subsection that is built; the
+default behind it is `NewHashEmbedder(384)`, a hashing term-frequency
+vectorizer. Nothing leaves the machine today because nothing calls out.
+
 ### 11.7.5 Reindexing & staleness
 A path's chunks are replaced atomically on reindex (old vectors deleted, new
 inserted in one transaction — a retrieval sees old or new, never a mix). A
@@ -378,8 +402,10 @@ to.
 - working + conversation memory (pure-Go SQLite, resume with integrity);
 - execution history + repository memory (manifest, tree cache, symbol graph,
   `.yoloignore`);
-- knowledge memory as a pure-Go vector store with SQLite persistence (chosen
-  over LanceDB/Chroma for single-binary) + event-driven incremental indexing;
+- knowledge memory as a pure-Go in-process retrieval index (chosen over
+  LanceDB/Chroma for single-binary) + event-driven incremental indexing —
+  shipped as a lexical index over a hashed term-frequency vectorizer, with the
+  `Embedder` seam left open for a real model (§11.6);
 - preference memory as the one user-editable store;
 - per-function chunking with overlap, size caps, offline-capable embedder.
 

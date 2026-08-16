@@ -321,7 +321,7 @@ subsequent editing work.
 |---|---|---|---|
 | L10-001 | 6 memory sub-stores (Working/Conversation/Exec/Repo/Knowledge/Preference) | L3-* | each store reads/writes its type |
 | L10-002 | Update-only-via-events rule (no direct writes from layers) | L10-001 | a non-event write fails lint/gate |
-| L10-003 | Pure-Go vector store (embedding + cosine) | L10-001 | nearest-k query returns seeded docs in order |
+| L10-003 | Pure-Go retrieval index (vectorize + cosine) | L10-001 | nearest-k query returns seeded docs in order |
 | L10-004 | Per-function chunking + reindex on `patch.applied` | L10-003 | an edited function's chunks refresh |
 | L10-005 | Persistence (session file) + cross-session recall | L10-001 | a fact stored in session A is recalled in B |
 | L10-006 | Memory feeds back into L4 context builder | L10-003, L4-002 | a recalled memory surfaces in the prompt |
@@ -330,8 +330,12 @@ subsequent editing work.
 
 The agent recalls a preference ("I prefer table-driven tests") stored in a
 prior session and applies it to new code. A `memory.update` event fires on
-every learning, visible in the transcript. The vector store is pure Go (no
+every learning, visible in the transcript. The retrieval index is pure Go (no
 external DB), satisfying the single-binary constraint.
+
+*As shipped:* L10-003 landed as a **lexical** index — a linear scan scored by
+cosine over hashed term-frequency vectors, with no embedding model behind the
+`Embedder` interface. See File 11 §11.6.
 
 ---
 
@@ -536,7 +540,7 @@ cannot be overridden.
 |---|---|---|---|---|
 | R1 | Model nondeterminism breaks golden tests | high | high | deterministic stub provider for all golden fixtures; real-model tests are smoke-only |
 | R2 | Sandbox escape on a new platform | medium | severe | per-platform red-team (H-006); default-deny posture; allowlist review per release |
-| R3 | Vector store memory bloat in long sessions | medium | medium | per-function chunking (L10-004); reindex only on `patch.applied`; size cap |
+| R3 | Retrieval index memory bloat in long sessions | medium | medium | per-function chunking (L10-004); reindex only on `patch.applied`; size cap |
 | R4 | MCP server misbehaves / hangs | medium | medium | per-call timeout (L7-003); process-group kill (L7-008); circuit-breaker after N fails |
 | R5 | Cost cap too tight in practice | low | medium | configurable budget (L12-008); degradation ladder before hard abort; telemetry to tune |
 | R6 | OTel collector unreachable stalls agent | low | high | export is async + fail-silent (File 13 §13.1.2); bus never blocks on telemetry |

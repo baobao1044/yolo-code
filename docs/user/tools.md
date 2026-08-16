@@ -247,10 +247,22 @@ Tool call from LLM
 ### Auto-approve config
 
 ```bash
-# Headless mode: enable auto-approve to avoid deadlock
+# Headless mode: opt out of prompting, since there is no human to prompt
 export YOLO_AUTO_APPROVE_MEDIUM=true   # bash (safe commands)
 export YOLO_AUTO_APPROVE_HIGH=true     # edit_file, bash (dangerous commands)
 ```
+
+> **Both variables are read, and both default to `false`.** They are looked up
+> in `newExecEngine` (`cmd/yolo/headless.go`), which is the single place
+> headless, TUI and coord each build their exec engine — so the setting applies
+> uniformly across all three. Unset means the tool prompts. Critical-risk tools
+> are denied outright and no setting overrides that.
+>
+> Earlier versions hardcoded `AutoApprove{RiskMedium: true, RiskHigh: true}` and
+> ignored both variables, so medium- and high-risk tools ran unprompted in every
+> mode. That is fixed; if you are reading a stale copy of these docs that says
+> the variables are not read, it predates the fix.
+
 
 > **Note**: Critical-risk tools are ALWAYS rejected, even with auto-approve enabled.
 

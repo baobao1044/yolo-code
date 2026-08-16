@@ -20,9 +20,13 @@
 | `YOLO_PROVIDER` | Provider preset name (openai, groq, ollama, etc.) — see `/provider` in TUI |
 | `YOLO_BASE_URL` | API base URL (default `https://api.openai.com/v1`) |
 | `YOLO_MODEL` | Model name (default `gpt-4o`) |
-| `YOLO_LOG` | Structured log file path |
+| `YOLO_LOG` | Structured log file path — **not read by the current code** |
 | `YOLO_AUTO_APPROVE_MEDIUM` | `"true"` = auto-approve medium-risk tools |
 | `YOLO_AUTO_APPROVE_HIGH` | `"true"` = auto-approve high-risk tools |
+
+> **Neither auto-approve variable is read.** Medium- and high-risk tools are
+> hardcoded to auto-approve in every mode; see
+> [Configuration → HITL Approval](configuration.md#hitl-approval).
 | `YOLO_REPO_ROOT` | Repo root (default = cwd) |
 
 ## Slash commands (TUI)
@@ -34,7 +38,7 @@
 | `/theme` | List themes + current |
 | `/theme <name>` | Switch palette (dark/light/contrast/mono) |
 | `/model <name>` | Swap model (rebuilds provider) |
-| `/provider` | List all 28 provider presets |
+| `/provider` | List all 29 provider presets |
 | `/provider <name>` | Switch provider preset |
 | `/status` | Show model, provider, theme |
 

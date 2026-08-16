@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`SemanticStore` renamed to `LexicalStore`** (`internal/memory`) — the type never did semantic retrieval. The default `Embedder` is a hashing term-frequency vectorizer (FNV-1a, dim 384), so retrieval matches literal shared tokens; a synonym-only paraphrase scores zero, now pinned by `TestDefaultEmbedderIsLexicalNotSemantic`. Constructors are `NewLexicalStore`, `NewLexicalStoreWith`, `NewLexicalStoreWithFS`. The accessor `Store.Semantic()` is unchanged — it keeps the spec's File 11 §11.6 name and has live call sites.
+- **Documentation corrected to match the implementation.** Earlier entries in this file (and the docs they described) called the retrieval layer a "pure-Go vector store" with "semantic search" and a "local embedding model". No embedding model has ever shipped, hosted or local, and there is no HNSW/ANN index — `Retrieve` is a linear scan scored by cosine over hashed term-frequency vectors. `docs/rag/vector-store.md`, `docs/rag/memory-lifecycle.md`, `docs/rag/context-engine.md`, `docs/user/architecture.md`, `README.md`, and File 11 now say lexical retrieval index. The `Embedder` interface remains the substitution seam: injecting a real model via `memory.Deps.Embedder` upgrades retrieval with no other change.
+- **Context Engine relevance blend documented honestly** — the "semantic" signal is token overlap, not vector cosine, and `centrality` is stubbed to `0` pending the repo dependency graph. Both are now stated in `docs/rag/context-engine.md`.
+
 ### Fixed
 
 - **Model responds with self-introduction instead of answering** — the system prompt (`internal/context/engine.go`) defined yolo as a "terminal coding agent" with coding-only tools/strategy, so non-coding questions (e.g. "search giá vàng hôm nay") made the model fall back to greeting ("Chào bạn! 👋 Tôi là yolo..."). Rewritten: identity is now "AI assistant", with explicit RULES to answer directly, not self-introduce, be concise; `grep` tool added to the prose tool list (it was in the native tool array but missing from the prompt); `bash` is now sanctioned for general queries (e.g. `curl` for web search).
@@ -18,14 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **Slash commands + Provider registry (kiểu AI SDK / Models.dev)**:
   - **Slash commands** in TUI: `/model <name>`, `/provider <name>`, `/provider` (list), `/status`, `/help`, `/clear`, `/theme <name>`. Local commands (help/clear/theme) handle in TUI; runtime commands (model/provider/status) go through the event bus (`UserCommandEvent` → driver → `CommandResponseEvent`).
-  - **Provider registry** (`internal/cognitive/providers.go`): 28 built-in presets (OpenAI, Anthropic-compat, Together, Groq, Mistral, DeepSeek, OpenRouter, Ollama, LM Studio, Fireworks, Perplexity, Reka, AI21, Cohere, NVIDIA, Cloudflare, AI/ML API, HuggingFace, SiliconFlow, NovitaAI, SambaNova, Lepton, Volcano, Qwen, ZhipuAI, 01.AI, Moonshot, MiniMax). Each carries base URL + default model + key env var. Local providers (Ollama, LM Studio) need no API key.
+  - **Provider registry** (`internal/cognitive/providers.go`): 29 built-in presets (OpenAI, Anthropic-compat, Together, Groq, Mistral, DeepSeek, OpenRouter, Ollama, LM Studio, Fireworks, Perplexity, Reka, AI21, Cohere, NVIDIA, Cloudflare, AI/ML API, HuggingFace, SiliconFlow, NovitaAI, SambaNova, Lepton, Volcano, Qwen, ZhipuAI, 01.AI, Moonshot, MiniMax, W&B). Each carries base URL + default model + key env var. Local providers (Ollama, LM Studio) need no API key.
   - `YOLO_PROVIDER` env var selects a preset at startup; `/provider <name>` switches at runtime. `cog.Core.SetProvider()` swaps the provider live (keeps conversation history).
   - New events: `UserCommandEvent`, `CommandResponseEvent`.
 - **TUI Overhaul — 4 fixes (theme, input/approval, onboarding, diff/cost)**:
   - **Theme system** (`internal/tui/theme.go`): 4 palettes (dark/light/contrast/mono) selected via `YOLO_THEME`; `NO_COLOR` forces mono; `YOLO_NO_MOTION` disables spinner + cursor blink. Replaces 14 hardcoded bright 256-color styles with adaptive, accessible palettes.
   - **Input widget** (`bubbles/textinput`): real blinking cursor, ←/→/Home/End/Ctrl-A/E/Ctrl-W cursor movement, full UTF-8 support (non-ASCII no longer dropped). Replaces the hand-rolled char append.
   - **Approval non-trapping**: when an approval is pending, scroll/help/quit/cancel still work — only typing is suppressed until you answer y/n.
-  - **Onboarding empty-state**: before the first task, the chat pane shows a welcome panel with three example prompts + the `?` help hint.
+  - **Onboarding empty-state**: before the first task, the chat pane shows a welcome panel with three example prompts + the `/help` hint.
   - **Help overlay grouped** into three labeled sections (Navigation, Task control, Approval) in a bordered box.
   - **Color-blind status tags**: board status uses glyph + text (`[~]` in progress, `[+]` done, `[!]` rework) so it's readable without color.
   - **Diff viewer real hunks** (`internal/patch/diff_render.go`): `UnifiedDiff(original, next)` produces unified-diff-style hunks (LCS line diff); `PatchAppliedEvent` widened with a `Diff string` field; the TUI renders `+`/`-`/context lines colored + numbered.

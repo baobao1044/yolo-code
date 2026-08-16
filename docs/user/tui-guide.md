@@ -95,23 +95,38 @@ The board uses glyph + text tags (`[~]` in progress, `[+]` done, `[!]` rework) s
 | **Esc** | Cancel current task | No-op if no active task |
 | **Ctrl+P** | Pause task | |
 | **Ctrl+R** | Resume paused task | |
-| **q / Ctrl+C** | Quit | Publishes `user.quit` and exits |
-| **y / n** | Approve / reject (when approval pending) | |
+| **Ctrl+C** | Quit | Publishes `user.quit` and exits. The one unconditional binding |
+| **y / n** | Approve / reject | Only when an approval is pending — otherwise plain text |
 | **Tab** | Cycle focus: chat → diff → board | Skips empty panes |
 | **PgUp / PgDn** | Scroll chat up / down | |
-| **?** | Toggle help overlay | |
+| **?** | Toggle help overlay | Only when the input isn't capturing text — use `/help` otherwise |
 | **←/→/Home/End** | Move cursor in input | (textinput widget) |
 | **Ctrl-A / Ctrl-E** | Cursor to start / end | |
 | **Ctrl-W** | Delete word backward | |
 | **Backspace** | Delete character | |
 
+### Printable keys are text while you type
+
+`q`, `?`, `y` and `n` are ordinary characters whenever the input line owns the keyboard — which is the whole session, except while an approval is pending. Typing `query` types `query`; it does not quit on the `q`. Those four act as commands only when the input is not capturing text.
+
+**Ctrl+C** is the one binding that always quits, whatever owns the keyboard — typing, help overlay, or a pending approval. **`/help`** is the always-available way to reach the help overlay, since `?` is a character while you type.
+
+The help overlay is modal: once open, any key closes it.
+
 ### Approval is non-trapping (Phase B)
 
 When an approval is pending, `y`/`n` approve/reject — but **scroll, help, quit, and cancel still work**. Only typing into the input line is suppressed until you answer.
 
+> **You will not currently see this prompt.** The TUI reuses the headless
+> composition root, which hardcodes `AutoApprove{RiskMedium: true, RiskHigh: true}`
+> — so medium- and high-risk tools run without asking. Critical-risk tools are
+> denied outright and also never prompt. The approval UI and the gate behind it
+> are both implemented; nothing currently triggers them. See
+> [Configuration → HITL Approval](configuration.md#hitl-approval).
+
 ## Onboarding (empty state)
 
-Before the first task, the chat pane shows a welcome panel naming the agent, three example prompts, and the `?` help hint — so a new user knows what to do instead of staring at a blank screen.
+Before the first task, the chat pane shows a welcome panel naming the agent, three example prompts, and the `/help` hint — so a new user knows what to do instead of staring at a blank screen.
 
 ## Slash commands
 
@@ -119,13 +134,13 @@ Type a line starting with `/` to run a command (local or runtime). They execute 
 
 | Command | Scope | Action |
 |---|---|---|
-| `/help` | local | Toggle the help overlay (same as `?`) |
+| `/help` | local | Toggle the help overlay — always available, unlike `?` |
 | `/clear` | local | Wipe the chat pane + reset scroll |
 | `/theme` | local | List themes + current (`dark light contrast mono`) |
 | `/theme <name>` | local | Switch palette immediately (e.g. `/theme contrast`) |
 | `/model` | runtime | (no effect — usage: `/model <name>`) |
 | `/model <name>` | runtime | Swap model, rebuild provider, keep conversation history |
-| `/provider` | runtime | List all 28 provider presets |
+| `/provider` | runtime | List all 29 provider presets |
 | `/provider <name>` | runtime | Switch provider preset (e.g. `/provider groq`) |
 | `/status` | runtime | Show current model, provider, theme |
 
@@ -135,7 +150,7 @@ Type a line starting with `/` to run a command (local or runtime). They execute 
 
 ### Provider presets
 
-28 presets are built in (OpenAI, Anthropic-compat, Together, Groq, Mistral, DeepSeek, OpenRouter, Ollama, LM Studio, ...). Use `/provider` to list them, `/provider <name>` to switch. Each preset sets the base URL + default model; the API key comes from the preset's env var (e.g. `GROQ_API_KEY`) or falls back to `YOLO_API_KEY`. Local providers (Ollama, LM Studio) need no key.
+29 presets are built in (OpenAI, Anthropic-compat, Together, Groq, Mistral, DeepSeek, OpenRouter, Ollama, LM Studio, ...). Use `/provider` to list them, `/provider <name>` to switch. Each preset sets the base URL + default model; the API key comes from the preset's env var (e.g. `GROQ_API_KEY`) or falls back to `YOLO_API_KEY`. Local providers (Ollama, LM Studio) need no key.
 
 ## Headless vs Interactive
 

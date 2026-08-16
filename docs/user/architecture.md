@@ -17,7 +17,7 @@ yolo-code is designed with a 12-layer architecture using an Event Bus as the bac
 │  └─ Infrastructure (L12) — otel, slog  │
 ├─────────────────────────────────────────┤
 │  Memory                                │
-│  └─ Memory System (L10) — vector store │
+│  └─ Memory System (L10) — lexical idx  │
 ├─────────────────────────────────────────┤
 │  Action                                │
 │  ├─ Execution (L7) — tools, sandbox   │
@@ -64,7 +64,9 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 
 ### L4 — Context Engine
 - 7 inputs (files, conversation, tool results, memory, preferences, etc.)
-- Relevance scoring: recency + proximity + semantic + centrality + explicit
+- Relevance scoring: recency + proximity + similarity + centrality + explicit
+  (similarity is token overlap, not vector cosine; centrality is stubbed to 0 —
+  see [RAG & Memory](../rag/context-engine.md))
 - Compression passes when context exceeds budget
 
 ### L5 — Prompt Compiler
@@ -81,7 +83,7 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 ## Action (L7–L9)
 
 ### L7 — Execution Engine
-- Tool Registry: 4 built-in tools (list_files, read_file, edit_file, bash)
+- Tool Registry: 5 built-in tools (list_files, read_file, edit_file, bash, grep)
 - Dispatcher + worker goroutines
 - Sandbox: path confinement, command allowlist, network default-deny
 - HITL approval flow (risk-based)
@@ -102,7 +104,8 @@ IDLE → PLAN → THINK → EXEC → WAIT_TOOL → VERIFY → (HasMore?) → PLA
 
 - 6 types: Working, Conversation, Exec, Repository, Knowledge, Preference
 - Updates ONLY via events (event-driven)
-- Pure-Go vector store
+- Pure-Go lexical retrieval index (hashed term-frequency similarity, linear scan);
+  an `Embedder` seam for a real embedding model, unused by default
 - Per-function chunking
 
 ## Coordination (L11)

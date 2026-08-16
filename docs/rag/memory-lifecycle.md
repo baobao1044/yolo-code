@@ -2,7 +2,7 @@
 
 The Memory System (L10) manages 6 types of memory, updated **entirely via events** — never through direct writes.
 
-> **Implementation status (S13, 2026-08-12):** the full 6-type lifecycle is wired into the live agent path. The memory listener subscribes to 9 event topics (`task.started`/`task.completed`/`state.change`/`assistant.message`/`tool.result`/`patch.applied`/`verification.failed`/`verification.stage`/`user.preference`) and is the sole writer to the sub-stores. Knowledge insights persist cross-session. The Context Engine queries the SemanticStore + KnowledgeStore via the `Memory.Retrieve` seam. Cold-start `IndexRepo` indexes the repo at session open. See `internal/memory/listener.go`, `internal/memory/knowledge.go`, `internal/memory/index.go`.
+> **Implementation status (S13, 2026-08-12):** the full 6-type lifecycle is wired into the live agent path. The memory listener subscribes to 9 event topics (`task.started`/`task.completed`/`state.change`/`assistant.message`/`tool.result`/`patch.applied`/`verification.failed`/`verification.stage`/`user.preference`) and is the sole writer to the sub-stores. Knowledge insights persist cross-session. The Context Engine queries the LexicalStore + KnowledgeStore via the `Memory.Retrieve` seam. Cold-start `IndexRepo` indexes the repo at session open. See `internal/memory/listener.go`, `internal/memory/knowledge.go`, `internal/memory/index.go`.
 
 ## Golden Rule
 
@@ -153,7 +153,7 @@ Event: user.preference → Preference Memory.set({ style: "conventional commits"
 3. Query Conversation Memory → history
 4. Query Exec Memory → recent tool results
 5. Query Repository Memory → file tree, signatures
-6. Query Vector Store (Knowledge + Repository) → semantic search
+6. Query the lexical retrieval index (Knowledge + Repository) → token-overlap search
 7. Query Preference Memory → user style
 8. Score all inputs
 9. Compress if exceeding budget
@@ -168,7 +168,7 @@ Event: user.preference → Preference Memory.set({ style: "conventional commits"
 | 2 | Conversation Memory | Conversation context |
 | 3 | Exec Memory (recent) | Recently run tool results |
 | 4 | Repository Memory | Code structure |
-| 5 | Vector Store (semantic) | Knowledge + similar code |
+| 5 | Lexical retrieval index | Knowledge + code chunks sharing the task's terms |
 | 6 | Preference Memory | Style preferences |
 
 ## Retention & Cleanup
@@ -192,11 +192,11 @@ Event: user.preference → Preference Memory.set({ style: "conventional commits"
 - **Budget exceeded** → Evict lowest-score Knowledge entries
 - **Least-recently-used** → Evict Knowledge/Preference entries when store is full
 
-### Vector Store cleanup
+### Retrieval index cleanup
 
 ```go
 // Evict entries when store exceeds capacity
-func (s *VectorStore) Evict(capacity int) {
+func (s *LexicalStore) Evict(capacity int) {
     if len(s.chunks) <= capacity {
         return
     }
@@ -211,5 +211,5 @@ func (s *VectorStore) Evict(capacity int) {
 ## See also
 
 - [Context Engine](context-engine.md) — How memory feeds into the prompt
-- [Vector Store](vector-store.md) — Vector store technical details
+- [Retrieval Index](vector-store.md) — Chunking, vectorizing, and retrieval details
 - [Architecture](../user/architecture.md) — Memory System position in the architecture

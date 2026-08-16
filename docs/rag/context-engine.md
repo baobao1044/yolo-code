@@ -24,9 +24,15 @@ Each input is scored by 5 signals:
 |---|---|---|
 | **Recency** | More recent = more important | Latest tool result > result from 5 turns ago |
 | **Proximity** | Near the file being edited = relevant | File in same package > file in different package |
-| **Semantic** | Similarity to the task | File with "fibonacci" when task says "fibonacci" |
+| **Similarity** | Term overlap with the task | File with "fibonacci" when task says "fibonacci" |
 | **Centrality** | Hub in dependency graph | `main.go` > helper file |
 | **Explicit** | User-specified | `--open main.go` = always include |
+
+Two notes on what is actually computed (`internal/context/rank.go`): the similarity
+signal is token overlap between the goal and the part's text — not vector cosine, and
+not meaning. **Centrality is stubbed to 0**; the repo dependency graph it would need
+does not exist yet, so the blend effectively runs on four signals. RAG parts bypass
+the blend entirely and keep the retrieval index's cosine score plus the explicit bonus.
 
 ### Compression
 
@@ -107,7 +113,7 @@ Turn 3: [history] + tool(role=tool, result) → LLM → final answer
 
 ```
 1. User submits task
-2. Context Engine queries Memory System with task embedding
+2. Context Engine queries the Memory System with the task text
 3. Memory System returns top-K relevant chunks
 4. Context Engine scores all inputs (files + memory + conversation + ...)
 5. Compress if exceeding budget
@@ -120,6 +126,6 @@ Turn 3: [history] + tool(role=tool, result) → LLM → final answer
 
 ## See also
 
-- [Vector Store](vector-store.md) — Pure-Go vector store and retrieval
+- [Retrieval Index](vector-store.md) — Pure-Go lexical index and retrieval
 - [Memory Lifecycle](memory-lifecycle.md) — How memory is created, read, and deleted
 - [Architecture](../user/architecture.md) — L4/L5 position in the architecture

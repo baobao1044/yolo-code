@@ -149,11 +149,15 @@ go test ./...
 ### Structured logging
 
 ```bash
-export YOLO_LOG=/tmp/yolo-debug.log
-yolo --headless < task.txt
+yolo --headless --event-log /tmp/yolo-events.jsonl < task.txt
 # View log
-cat /tmp/yolo-debug.log
+cat /tmp/yolo-events.jsonl
 ```
+
+`--event-log` (env: `YOLO_EVENT_LOG`) appends every event to a durable, fsynced
+log, so a run stays replayable after a crash. `YOLO_LOG` is **not read by the
+current code** — it produces no file and no error, so an example built on it
+leaves you `cat`-ing a path that was never created.
 
 ### Debug LLM calls
 
