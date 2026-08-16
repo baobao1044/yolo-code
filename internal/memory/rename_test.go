@@ -121,17 +121,15 @@ func TestRenamerDoesNotRetryAnUnrelatedError(t *testing.T) {
 	}
 }
 
-// TestShareRenamerIsAPlainRenameOffWindows pins the platform contract from the
-// Unix side: the production policy must add nothing here. If renameRetries
-// ever became non-zero on Unix, every writeJSON failure would start costing a
-// wait for a condition that cannot occur.
-func TestShareRenamerIsAPlainRenameOffWindows(t *testing.T) {
-	r := shareRenamer()
-	if r.blocked(errBlocked) {
-		// True on Windows, where the constants below are also non-zero.
-		t.Skip("windows: the retry policy is supposed to be active")
-	}
-	if r.retries != 0 {
-		t.Errorf("renameRetries = %d on a platform where nothing blocks a rename, want 0", r.retries)
-	}
-}
+// The per-platform contracts for shareRenamer() live in rename_other_test.go
+// and rename_windows_test.go, behind the same build tags as the policy they
+// check.
+//
+// They were one test here first, guarded by `if r.blocked(errBlocked) { skip
+// }` on the theory that a live predicate identifies the platform. It does not:
+// errBlocked is a stub from errors.New and renameBlocked matches syscall
+// errnos, so that call is false on Windows too and the skip fired nowhere. The
+// test then asserted the Unix budget on Windows and failed there — a condition
+// that reads as a platform guard and is a constant, which is the same shape as
+// the `!sawDone && !sawFinish` tautology this branch removed from
+// openai_compat.go. A build tag is the only thing that actually knows.
